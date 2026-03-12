@@ -23,7 +23,7 @@ services:
     name: job-web
     env: python
     buildCommand: pip install -r requirements-web.txt
-    startCommand: gunicorn --workers 2 --bind "0.0.0.0:$PORT" --timeout 120 dashboard:app
+    startCommand: gunicorn --workers 2 --bind 0.0.0.0:$PORT --timeout 120 dashboard:app
     plan: free
     healthCheckPath: /
     envVars:
