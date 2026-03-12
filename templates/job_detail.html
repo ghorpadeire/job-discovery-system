@@ -1,0 +1,261 @@
+{% extends "base.html" %}
+{% block title %}{{ job.title }} — {{ job.company }}{% endblock %}
+
+{% block content %}
+<!-- Breadcrumb -->
+<nav aria-label="breadcrumb" class="mb-3">
+  <ol class="breadcrumb">
+    <li class="breadcrumb-item"><a href="{{ url_for('home') }}" class="text-muted">Dashboard</a></li>
+    <li class="breadcrumb-item"><a href="{{ url_for('jobs') }}" class="text-muted">Jobs</a></li>
+    <li class="breadcrumb-item active text-white" aria-current="page">{{ job.title | truncate(40) }}</li>
+  </ol>
+</nav>
+
+<!-- Header -->
+<div class="d-flex align-items-start justify-content-between mb-4 gap-3 flex-wrap">
+  <div>
+    <h1 class="h2 fw-bold mb-1">{{ job.title }}</h1>
+    <div class="d-flex align-items-center gap-2 flex-wrap">
+      <span class="fw-medium text-primary">{{ job.company }}</span>
+      <span class="text-muted">·</span>
+      <span class="badge bg-dark text-muted border border-secondary">{{ job.source }}</span>
+      {% if job.suspected_ghost %}
+      <span class="badge bg-warning text-dark"><i class="bi bi-exclamation-triangle me-1"></i>Ghost Risk</span>
+      {% else %}
+      <span class="badge bg-success-subtle text-success"><i class="bi bi-shield-check me-1"></i>Active</span>
+      {% endif %}
+      <span class="text-muted small">First seen {{ job.first_seen | relative_date }}</span>
+    </div>
+  </div>
+
+  <div class="d-flex gap-2 flex-wrap">
+    {% if job.url %}
+    <a href="{{ job.url }}" target="_blank" rel="noopener noreferrer"
+       class="btn btn-primary">
+      <i class="bi bi-box-arrow-up-right me-1"></i>View Listing
+    </a>
+    {% endif %}
+    {% if not tracker %}
+    <form action="{{ url_for('tracker_add', job_id=job.id) }}" method="POST">
+      <button type="submit" class="btn btn-outline-success">
+        <i class="bi bi-bookmark-plus me-1"></i>Add to Tracker
+      </button>
+    </form>
+    {% else %}
+    <a href="{{ url_for('apply_tracker') }}" class="btn btn-outline-primary">
+      <i class="bi bi-kanban me-1"></i>In Tracker: {{ tracker.status | title }}
+    </a>
+    {% endif %}
+  </div>
+</div>
+
+<!-- ── Main grid ── -->
+<div class="row g-3">
+
+  <!-- Left: scores + details -->
+  <div class="col-lg-8">
+
+    <!-- Score summary cards -->
+    <div class="row g-2 mb-3">
+      <div class="col-4">
+        <div class="card p-3 text-center">
+          <div class="stat-label mb-1">Combined Score</div>
+          {% if job.combined_score is not none %}
+          {% set sc = job.combined_score | round(1) %}
+          <div class="stat-number text-{{ sc | score_class }}">{{ "%.0f" | format(sc) }}</div>
+          <div class="progress mt-2" style="height:6px">
+            <div class="progress-bar bg-{{ sc | score_class }}" style="width:{{ sc | score_pct }}%"></div>
+          </div>
+          {% else %}
+          <div class="stat-number text-muted">—</div>
+          {% endif %}
+        </div>
+      </div>
+      <div class="col-4">
+        <div class="card p-3 text-center">
+          <div class="stat-label mb-1">Legitimacy</div>
+          {% if job.legitimacy_score is not none %}
+          {% set ls = job.legitimacy_score %}
+          <div class="stat-number text-{{ ls | score_class }}">{{ ls }}</div>
+          <div class="progress mt-2" style="height:6px">
+            <div class="progress-bar bg-{{ ls | score_class }}" style="width:{{ ls | score_pct }}%"></div>
+          </div>
+          {% else %}
+          <div class="stat-number text-muted">—</div>
+          {% endif %}
+        </div>
+      </div>
+      <div class="col-4">
+        <div class="card p-3 text-center">
+          <div class="stat-label mb-1">AI Relevance</div>
+          {% if job.relevance_score is not none %}
+          {% set rs = job.relevance_score %}
+          <div class="stat-number {% if rs >= 6 %}text-success{% elif rs >= 3 %}text-warning{% else %}text-danger{% endif %}">
+            {{ "%.1f" | format(rs) }}<small class="text-muted fs-6">/10</small>
+          </div>
+          {% else %}
+          <div class="stat-number text-muted">—</div>
+          {% endif %}
+        </div>
+      </div>
+    </div>
+
+    <!-- Signal Breakdown -->
+    {% if breakdown %}
+    <div class="card p-3 mb-3">
+      <h6 class="fw-semibold mb-3"><i class="bi bi-bar-chart-steps me-1 text-primary"></i>Score Breakdown</h6>
+      {% for signal, data in breakdown.items() %}
+      <div class="signal-row d-flex align-items-center gap-2 mb-2">
+        <span class="signal-label">
+          {% if data.earned %}
+          <i class="bi bi-check-circle-fill text-success me-1" style="font-size:.75rem"></i>
+          {% else %}
+          <i class="bi bi-x-circle-fill text-danger me-1" style="font-size:.75rem"></i>
+          {% endif %}
+          {{ data.label }}
+        </span>
+        <div class="flex-grow-1">
+          <div class="progress" style="height:8px">
+            <div class="progress-bar {% if data.earned %}bg-success{% else %}bg-secondary{% endif %}"
+                 style="width:{{ data.pct }}%"></div>
+          </div>
+        </div>
+        <span class="signal-pts text-muted">
+          {{ data.pts }}/{{ data.max }}
+        </span>
+      </div>
+      {% endfor %}
+    </div>
+    {% endif %}
+
+    <!-- AI Reasoning -->
+    {% if job.ai_reasoning %}
+    <div class="card p-3 mb-3">
+      <h6 class="fw-semibold mb-3"><i class="bi bi-robot me-1 text-info"></i>AI Analysis</h6>
+      {% if job.ai_reasoning.relevance %}
+      <div class="mb-3">
+        <div class="small text-muted text-uppercase fw-medium mb-1">Relevance Assessment</div>
+        <p class="mb-0 small text-white">{{ job.ai_reasoning.relevance }}</p>
+      </div>
+      {% endif %}
+      {% if job.ai_reasoning.ghost %}
+      <div>
+        <div class="small text-muted text-uppercase fw-medium mb-1">Ghost Risk Assessment</div>
+        <p class="mb-0 small text-white">{{ job.ai_reasoning.ghost }}</p>
+      </div>
+      {% endif %}
+      {% if job.ghost_probability is not none %}
+      <div class="mt-3 pt-2 border-top border-secondary">
+        <div class="d-flex align-items-center gap-2">
+          <span class="small text-muted">Ghost probability:</span>
+          <span class="badge {% if job.ghost_probability > 0.5 %}bg-danger{% elif job.ghost_probability > 0.25 %}bg-warning text-dark{% else %}bg-success{% endif %}">
+            {{ "%.0f" | format(job.ghost_probability * 100) }}%
+          </span>
+          <div class="progress flex-grow-1" style="height:6px">
+            <div class="progress-bar bg-danger" style="width:{{ (job.ghost_probability * 100) | round }}%"></div>
+          </div>
+        </div>
+      </div>
+      {% endif %}
+    </div>
+    {% endif %}
+
+    <!-- Job description -->
+    {% if job.description %}
+    <div class="card p-3 mb-3">
+      <h6 class="fw-semibold mb-3"><i class="bi bi-file-text me-1 text-secondary"></i>Job Description</h6>
+      <div class="text-white small" style="white-space: pre-wrap; max-height: 400px; overflow-y: auto; line-height: 1.6;">{{ job.description | truncate(3000, True) }}</div>
+    </div>
+    {% endif %}
+
+  </div>
+
+  <!-- Right: metadata + tracker -->
+  <div class="col-lg-4">
+
+    <!-- Job metadata -->
+    <div class="card p-3 mb-3">
+      <h6 class="fw-semibold mb-3"><i class="bi bi-info-circle me-1 text-secondary"></i>Details</h6>
+      <dl class="mb-0" style="font-size:.875rem">
+        <dt class="text-muted fw-normal small mb-0">Company</dt>
+        <dd class="mb-2 fw-medium">{{ job.company }}</dd>
+
+        {% if job.salary %}
+        <dt class="text-muted fw-normal small mb-0">Salary</dt>
+        <dd class="mb-2 text-success fw-medium">{{ job.salary }}</dd>
+        {% endif %}
+
+        <dt class="text-muted fw-normal small mb-0">Source</dt>
+        <dd class="mb-2"><span class="badge bg-dark border border-secondary text-muted">{{ job.source }}</span></dd>
+
+        {% if job.search_term %}
+        <dt class="text-muted fw-normal small mb-0">Search Term</dt>
+        <dd class="mb-2 text-muted">{{ job.search_term }}</dd>
+        {% endif %}
+
+        <dt class="text-muted fw-normal small mb-0">Date Posted</dt>
+        <dd class="mb-2">{{ job.date_posted or '—' }}</dd>
+
+        <dt class="text-muted fw-normal small mb-0">First Seen</dt>
+        <dd class="mb-2">{{ job.first_seen.strftime('%Y-%m-%d %H:%M') if job.first_seen else '—' }}</dd>
+
+        <dt class="text-muted fw-normal small mb-0">Last Seen</dt>
+        <dd class="mb-2">{{ job.last_seen.strftime('%Y-%m-%d %H:%M') if job.last_seen else '—' }}</dd>
+
+        {% if job.sources and job.sources | length > 1 %}
+        <dt class="text-muted fw-normal small mb-0">Also on</dt>
+        <dd class="mb-0">
+          {% for src in job.sources %}
+          <span class="badge bg-secondary-subtle text-secondary me-1">{{ src }}</span>
+          {% endfor %}
+        </dd>
+        {% endif %}
+      </dl>
+    </div>
+
+    <!-- Tracker panel -->
+    <div class="card p-3 mb-3">
+      <h6 class="fw-semibold mb-3"><i class="bi bi-kanban me-1 text-primary"></i>Apply Tracker</h6>
+      {% if tracker %}
+        <div class="d-flex flex-wrap gap-1 mb-3">
+          {% for s in statuses %}
+          <form action="{{ url_for('tracker_move', entry_id=tracker.id, new_status=s) }}" method="POST">
+            <button type="submit"
+                    class="btn btn-sm {% if tracker.status == s %}btn-primary{% else %}btn-outline-secondary{% endif %}">
+              {{ s | title }}
+            </button>
+          </form>
+          {% endfor %}
+        </div>
+
+        {% if tracker.applied_at %}
+        <small class="text-muted d-block mb-2">Applied: {{ tracker.applied_at.strftime('%b %d, %Y') }}</small>
+        {% endif %}
+
+        <form action="{{ url_for('tracker_notes', entry_id=tracker.id) }}" method="POST"
+              hx-post="{{ url_for('tracker_notes', entry_id=tracker.id) }}"
+              hx-swap="none">
+          <textarea class="form-control form-control-sm bg-dark border-secondary text-white mb-2"
+                    name="notes" rows="3"
+                    placeholder="Add notes…">{{ tracker.notes or '' }}</textarea>
+          <div class="d-flex gap-2">
+            <button type="submit" class="btn btn-sm btn-outline-success">Save Notes</button>
+            <form action="{{ url_for('tracker_remove', entry_id=tracker.id) }}" method="POST" class="d-inline">
+              <button type="submit" class="btn btn-sm btn-outline-danger"
+                      onclick="return confirm('Remove from tracker?')">Remove</button>
+            </form>
+          </div>
+        </form>
+      {% else %}
+        <p class="text-muted small mb-2">Not in tracker yet.</p>
+        <form action="{{ url_for('tracker_add', job_id=job.id) }}" method="POST">
+          <button type="submit" class="btn btn-sm btn-success w-100">
+            <i class="bi bi-bookmark-plus me-1"></i>Add to Tracker
+          </button>
+        </form>
+      {% endif %}
+    </div>
+
+  </div>
+</div>
+{% endblock %}

@@ -1,0 +1,34 @@
+# Web scraping
+playwright>=1.42.0
+beautifulsoup4>=4.12.0
+lxml>=5.0.0
+
+# HTTP (URL resolution checks)
+httpx[async]>=0.27.0
+
+# Database
+sqlalchemy>=2.0.0
+psycopg2-binary>=2.9.9       # PostgreSQL driver
+
+# Cache
+redis>=5.0.0
+
+# Config
+python-dotenv>=1.0.0
+
+# Date parsing
+python-dateutil>=2.9.0
+
+# AI layer (Phase 4)
+openai>=1.30.0
+numpy>=1.26.0
+
+# Scheduler (services/ loop processes)
+APScheduler>=3.10.0
+
+# Web dashboard (Phase 6)
+flask>=3.0.0
+gunicorn>=21.0.0
+
+# Telegram bot (Phase 5)
+python-telegram-bot[job-queue]>=22.0

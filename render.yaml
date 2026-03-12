@@ -1,0 +1,88 @@
+# render.yaml — Render Blueprint for Job Discovery System
+#
+# Services deployed:
+#   • jobsdb          — Managed PostgreSQL 16 (free 90 days)
+#   • job-web         — Flask dashboard (gunicorn, port auto-assigned by Render)
+#   • job-scraper     — Background worker: scrapes every 12h via APScheduler
+#   • job-scorer      — Background worker: scores after each scrape via Redis pub/sub
+#
+# Redis:
+#   Render has no free Redis tier. Create a free Upstash Redis instance at
+#   https://upstash.com and paste the "REDIS_URL" (redis://...) into the
+#   environment variable below (sync: false means you set it in the Render
+#   dashboard after first deploy).
+#
+# Deploy:
+#   1. Push this repo to GitHub
+#   2. Go to https://dashboard.render.com → New → Blueprint
+#   3. Connect the repo — Render reads this file automatically
+#   4. Set the "sync: false" env vars in the Render dashboard
+
+databases:
+  - name: jobsdb
+    databaseName: jobsdb
+    user: jobsuser
+    plan: free          # 256 MB RAM, 1 GB storage — expires after 90 days
+
+services:
+  # ── Web dashboard ─────────────────────────────────────────────────────────
+  - type: web
+    name: job-web
+    env: docker
+    dockerfilePath: ./Dockerfile
+    dockerCommand: gunicorn --workers 2 --bind "0.0.0.0:$PORT" --timeout 120 dashboard:app
+    plan: free          # Spins down after 15 min inactivity on free tier
+    healthCheckPath: /
+    envVars:
+      - key: DATABASE_URL
+        fromDatabase:
+          name: jobsdb
+          property: connectionString
+      - key: REDIS_URL
+        sync: false     # Set this to your Upstash Redis URL in the Render dashboard
+      - key: OPENAI_API_KEY
+        sync: false     # Optional — only needed for AI scoring
+      - key: FLASK_ENV
+        value: production
+      - key: RENDER
+        value: "true"
+
+  # ── Scraper background worker ──────────────────────────────────────────────
+  - type: worker
+    name: job-scraper
+    env: docker
+    dockerfilePath: ./Dockerfile
+    dockerCommand: python services/scraper_loop.py
+    plan: free
+    envVars:
+      - key: DATABASE_URL
+        fromDatabase:
+          name: jobsdb
+          property: connectionString
+      - key: REDIS_URL
+        sync: false
+      - key: SCRAPE_INTERVAL_HOURS
+        value: "12"
+      - key: SCRAPE_SOURCES
+        value: all
+
+  # ── Scorer background worker ───────────────────────────────────────────────
+  - type: worker
+    name: job-scorer
+    env: docker
+    dockerfilePath: ./Dockerfile
+    dockerCommand: python services/scorer_loop.py
+    plan: free
+    envVars:
+      - key: DATABASE_URL
+        fromDatabase:
+          name: jobsdb
+          property: connectionString
+      - key: REDIS_URL
+        sync: false
+      - key: OPENAI_API_KEY
+        sync: false
+      - key: AI_SCORE_ENABLED
+        value: "false"   # Set to "true" if you want GPT scoring (costs money)
+      - key: SCORER_FALLBACK_HOURS
+        value: "13"      # Re-score even if pub/sub event was missed

@@ -1,0 +1,184 @@
+{% extends "base.html" %}
+{% block title %}Dashboard{% endblock %}
+
+{% block content %}
+<div class="d-flex align-items-center justify-content-between mb-4">
+  <div>
+    <h1 class="h3 fw-bold mb-0">Dashboard</h1>
+    <p class="text-muted mb-0 small">Job discovery system overview</p>
+  </div>
+  <a href="{{ url_for('jobs') }}" class="btn btn-primary btn-sm">
+    <i class="bi bi-table me-1"></i>Browse All Jobs
+  </a>
+</div>
+
+<!-- ── Stat cards ── -->
+<div class="row g-3 mb-4">
+
+  <div class="col-6 col-md-4 col-xl-2">
+    <div class="card card-stat h-100 p-3">
+      <div class="stat-label mb-1"><i class="bi bi-briefcase me-1"></i>Active Jobs</div>
+      <div class="stat-number text-white">{{ total_active }}</div>
+    </div>
+  </div>
+
+  <div class="col-6 col-md-4 col-xl-2">
+    <div class="card card-stat h-100 p-3">
+      <div class="stat-label mb-1"><i class="bi bi-graph-up me-1"></i>Avg Combined</div>
+      <div class="stat-number {% if avg_combined and avg_combined >= 50 %}text-success{% elif avg_combined %}text-warning{% else %}text-muted{% endif %}">
+        {{ avg_combined or '—' }}
+      </div>
+    </div>
+  </div>
+
+  <div class="col-6 col-md-4 col-xl-2">
+    <div class="card card-stat h-100 p-3">
+      <div class="stat-label mb-1"><i class="bi bi-calendar-plus me-1"></i>Added Today</div>
+      <div class="stat-number text-info">{{ added_today }}</div>
+    </div>
+  </div>
+
+  <div class="col-6 col-md-4 col-xl-2">
+    <div class="card card-stat h-100 p-3">
+      <div class="stat-label mb-1"><i class="bi bi-exclamation-triangle me-1"></i>Ghost Jobs</div>
+      <div class="stat-number text-warning">{{ ghost_count }}</div>
+    </div>
+  </div>
+
+  <div class="col-6 col-md-4 col-xl-2">
+    <div class="card card-stat h-100 p-3">
+      <div class="stat-label mb-1"><i class="bi bi-shield-check me-1"></i>High Conf ≥70</div>
+      <div class="stat-number text-success">{{ high_conf }}</div>
+    </div>
+  </div>
+
+  <div class="col-6 col-md-4 col-xl-2">
+    <div class="card card-stat h-100 p-3">
+      <div class="stat-label mb-1"><i class="bi bi-kanban me-1"></i>In Tracker</div>
+      <div class="stat-number text-primary">{{ in_tracker }}</div>
+    </div>
+  </div>
+
+</div>
+
+<!-- ── Score distribution + source breakdown ── -->
+<div class="row g-3 mb-4">
+  <div class="col-md-8">
+    <div class="card p-3">
+      <h6 class="fw-semibold mb-3"><i class="bi bi-bar-chart me-1 text-primary"></i>Top Jobs by Score</h6>
+      {% if top_jobs %}
+      <div class="table-responsive">
+        <table class="table table-hover align-middle mb-0">
+          <thead>
+            <tr>
+              <th>Title</th>
+              <th>Company</th>
+              <th>Score</th>
+              <th>Relevance</th>
+              <th>Source</th>
+              <th></th>
+            </tr>
+          </thead>
+          <tbody>
+            {% for job in top_jobs %}
+            <tr>
+              <td>
+                <a href="{{ url_for('job_detail', job_id=job.id) }}" class="text-decoration-none text-white fw-medium">
+                  {{ job.title | truncate(45, True) }}
+                </a>
+              </td>
+              <td class="text-muted">{{ job.company | truncate(22, True) }}</td>
+              <td>
+                {% set sc = job.combined_score | round(1) if job.combined_score else 0 %}
+                <span class="score-pill bg-{{ sc | score_class }}-subtle text-{{ sc | score_class }}">
+                  {{ "%.0f" | format(sc) }}
+                </span>
+                <div class="progress score-bar mt-1" style="width:60px">
+                  <div class="progress-bar bg-{{ sc | score_class }}"
+                       style="width:{{ sc | score_pct }}%"></div>
+                </div>
+              </td>
+              <td>
+                {% if job.relevance_score is not none %}
+                  <span class="badge bg-info-subtle text-info">{{ "%.1f" | format(job.relevance_score) }}/10</span>
+                {% else %}
+                  <span class="text-muted">—</span>
+                {% endif %}
+              </td>
+              <td><span class="badge bg-secondary-subtle text-secondary">{{ job.source }}</span></td>
+              <td>
+                <a href="{{ url_for('job_detail', job_id=job.id) }}" class="btn btn-xs btn-outline-secondary btn-sm py-0 px-1">
+                  <i class="bi bi-arrow-right"></i>
+                </a>
+              </td>
+            </tr>
+            {% endfor %}
+          </tbody>
+        </table>
+      </div>
+      <div class="mt-2">
+        <a href="{{ url_for('jobs') }}" class="btn btn-sm btn-outline-primary">
+          View all {{ total_active }} jobs <i class="bi bi-arrow-right ms-1"></i>
+        </a>
+      </div>
+      {% else %}
+      <p class="text-muted mb-0">No scored jobs yet. Run <code>py ai_score_jobs.py</code> first.</p>
+      {% endif %}
+    </div>
+  </div>
+
+  <div class="col-md-4">
+    <div class="card p-3 h-100">
+      <h6 class="fw-semibold mb-3"><i class="bi bi-pie-chart me-1 text-info"></i>By Source</h6>
+      {% if source_stats %}
+        {% for row in source_stats %}
+        <div class="mb-3">
+          <div class="d-flex justify-content-between align-items-center mb-1">
+            <span class="text-white small fw-medium">{{ row.source }}</span>
+            <span class="text-muted small">{{ row.cnt }} jobs</span>
+          </div>
+          <div class="progress" style="height:8px">
+            {% set pct = (row.cnt / total_active * 100) | round(0) if total_active else 0 %}
+            <div class="progress-bar bg-primary" style="width:{{ pct }}%"></div>
+          </div>
+          <div class="text-muted" style="font-size:.73rem">
+            Avg score: {{ "%.1f" | format(row.avg_combined) if row.avg_combined else '—' }}
+          </div>
+        </div>
+        {% endfor %}
+      {% else %}
+        <p class="text-muted small">No data.</p>
+      {% endif %}
+
+      <!-- Legend -->
+      <hr class="my-2">
+      <div class="small text-muted">
+        <div class="d-flex gap-2 align-items-center mb-1">
+          <span class="badge bg-success">≥70</span> High confidence
+        </div>
+        <div class="d-flex gap-2 align-items-center mb-1">
+          <span class="badge bg-warning text-dark">40-69</span> Worth reviewing
+        </div>
+        <div class="d-flex gap-2 align-items-center">
+          <span class="badge bg-danger">&lt;40</span> Low / Ghost risk
+        </div>
+      </div>
+    </div>
+  </div>
+</div>
+
+<!-- ── Quick links ── -->
+<div class="row g-3">
+  <div class="col-12">
+    <div class="card p-3">
+      <h6 class="fw-semibold mb-3 text-muted"><i class="bi bi-terminal me-1"></i>Quick Commands</h6>
+      <div class="d-flex flex-wrap gap-2">
+        <code class="bg-dark text-success rounded px-2 py-1 small">py run_all.py</code>
+        <code class="bg-dark text-success rounded px-2 py-1 small">py ai_score_jobs.py --no-embed --no-score</code>
+        <code class="bg-dark text-success rounded px-2 py-1 small">py score_jobs.py --min-score 70</code>
+        <code class="bg-dark text-success rounded px-2 py-1 small">py telegram_bot.py</code>
+      </div>
+    </div>
+  </div>
+</div>
+{% endblock %}

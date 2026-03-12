@@ -1,0 +1,254 @@
+<!DOCTYPE html>
+<html lang="en" data-bs-theme="dark">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>{% block title %}Job Discovery{% endblock %} — JobHunter</title>
+
+  <!-- Bootstrap 5.3 -->
+  <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/bootstrap@5.3.3/dist/css/bootstrap.min.css">
+  <!-- Bootstrap Icons -->
+  <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/bootstrap-icons@1.11.3/font/bootstrap-icons.min.css">
+  <!-- HTMX -->
+  <script src="https://unpkg.com/htmx.org@2.0.4/dist/htmx.min.js" defer></script>
+
+  <style>
+    :root {
+      --accent: #0d6efd;
+      --surface: #1e1e2e;
+    }
+
+    body { background: #111827; }
+
+    .navbar-brand {
+      font-weight: 700;
+      letter-spacing: -0.5px;
+    }
+    .navbar-brand span { color: var(--accent); }
+
+    /* Sidebar / page shell */
+    .page-wrapper {
+      display: flex;
+      min-height: 100vh;
+    }
+    .sidebar {
+      width: 220px;
+      min-width: 220px;
+      background: #0f0f1a;
+      border-right: 1px solid rgba(255,255,255,0.07);
+      padding: 1.5rem 0;
+      position: sticky;
+      top: 0;
+      height: 100vh;
+      overflow-y: auto;
+    }
+    .sidebar .nav-link {
+      color: rgba(255,255,255,0.65);
+      padding: .55rem 1.4rem;
+      border-radius: 0;
+      font-size: .9rem;
+      display: flex;
+      align-items: center;
+      gap: .55rem;
+      transition: background .15s, color .15s;
+    }
+    .sidebar .nav-link:hover,
+    .sidebar .nav-link.active {
+      color: #fff;
+      background: rgba(13,110,253,0.18);
+    }
+    .sidebar .nav-link.active {
+      border-left: 3px solid var(--accent);
+    }
+    .sidebar-brand {
+      padding: 0 1.4rem 1.5rem;
+      font-size: 1.1rem;
+      font-weight: 700;
+      color: #fff;
+      display: flex;
+      align-items: center;
+      gap: .5rem;
+    }
+    .sidebar-brand i { color: var(--accent); }
+
+    .sidebar-section {
+      font-size: .7rem;
+      text-transform: uppercase;
+      letter-spacing: .08em;
+      color: rgba(255,255,255,0.35);
+      padding: 1.2rem 1.4rem .3rem;
+    }
+
+    .main-content {
+      flex: 1;
+      padding: 2rem;
+      overflow-x: hidden;
+    }
+
+    /* Score badge / bar */
+    .score-bar { height: 6px; border-radius: 3px; }
+
+    /* Card glass effect */
+    .card {
+      background: #1a1a2e;
+      border-color: rgba(255,255,255,0.08);
+    }
+    .card-stat {
+      background: linear-gradient(135deg, #1e1e3a 0%, #1a1a2e 100%);
+    }
+
+    /* Stat number */
+    .stat-number {
+      font-size: 2.4rem;
+      font-weight: 700;
+      line-height: 1;
+    }
+    .stat-label {
+      font-size: .8rem;
+      text-transform: uppercase;
+      letter-spacing: .06em;
+      color: rgba(255,255,255,.5);
+    }
+
+    /* Table tweaks */
+    .table { font-size: .875rem; }
+    .table th { color: rgba(255,255,255,.55); font-weight: 500; font-size: .78rem; text-transform: uppercase; letter-spacing: .05em; }
+
+    /* Kanban */
+    .kanban-col {
+      min-width: 200px;
+      max-width: 250px;
+    }
+    .kanban-card {
+      background: #1e1e3a;
+      border: 1px solid rgba(255,255,255,0.09);
+      border-radius: .5rem;
+      padding: .75rem;
+      margin-bottom: .6rem;
+      font-size: .85rem;
+    }
+    .kanban-col-header {
+      font-size: .75rem;
+      text-transform: uppercase;
+      letter-spacing: .08em;
+      font-weight: 600;
+      padding: .4rem .75rem;
+      border-radius: .4rem;
+      margin-bottom: .75rem;
+    }
+
+    /* Score pill */
+    .score-pill {
+      font-size: .72rem;
+      font-weight: 700;
+      padding: .2em .55em;
+      border-radius: 99px;
+    }
+
+    /* Filter form */
+    .filter-panel {
+      background: #15152b;
+      border: 1px solid rgba(255,255,255,0.07);
+      border-radius: .6rem;
+      padding: 1rem 1.2rem;
+      margin-bottom: 1.25rem;
+    }
+
+    /* HTMX loading indicator */
+    .htmx-indicator { display: none; }
+    .htmx-request .htmx-indicator { display: inline-block; }
+
+    /* Tooltip helpers */
+    abbr[title] { cursor: help; }
+
+    /* Breakdown signal bar */
+    .signal-row { margin-bottom: .4rem; }
+    .signal-label { font-size: .8rem; min-width: 180px; }
+    .signal-pts { font-size: .8rem; min-width: 40px; text-align: right; }
+  </style>
+
+  {% block head %}{% endblock %}
+</head>
+<body>
+
+<div class="page-wrapper">
+  <!-- Sidebar -->
+  <nav class="sidebar d-none d-md-flex flex-column">
+    <div class="sidebar-brand">
+      <i class="bi bi-briefcase-fill"></i> JobHunter
+    </div>
+
+    <div class="sidebar-section">Overview</div>
+    <ul class="nav flex-column">
+      <li class="nav-item">
+        <a class="nav-link {% if request.endpoint == 'home' %}active{% endif %}"
+           href="{{ url_for('home') }}">
+          <i class="bi bi-speedometer2"></i> Dashboard
+        </a>
+      </li>
+    </ul>
+
+    <div class="sidebar-section">Jobs</div>
+    <ul class="nav flex-column">
+      <li class="nav-item">
+        <a class="nav-link {% if request.endpoint in ['jobs','jobs_rows'] %}active{% endif %}"
+           href="{{ url_for('jobs') }}">
+          <i class="bi bi-table"></i> Browse Jobs
+        </a>
+      </li>
+      <li class="nav-item">
+        <a class="nav-link {% if request.endpoint == 'companies' %}active{% endif %}"
+           href="{{ url_for('companies') }}">
+          <i class="bi bi-building"></i> Companies
+        </a>
+      </li>
+    </ul>
+
+    <div class="sidebar-section">Tracker</div>
+    <ul class="nav flex-column">
+      <li class="nav-item">
+        <a class="nav-link {% if request.endpoint == 'apply_tracker' %}active{% endif %}"
+           href="{{ url_for('apply_tracker') }}">
+          <i class="bi bi-kanban"></i> Apply Tracker
+        </a>
+      </li>
+    </ul>
+
+    <div class="mt-auto px-3 pb-2">
+      <small class="text-muted d-block">
+        <i class="bi bi-circle-fill text-success" style="font-size:.5rem"></i>
+        DB connected
+      </small>
+      <small class="text-muted">{{ now }}</small>
+    </div>
+  </nav>
+
+  <!-- Main -->
+  <div class="main-content">
+    <!-- Mobile header -->
+    <nav class="navbar navbar-expand-md d-md-none mb-3 px-0">
+      <span class="navbar-brand"><i class="bi bi-briefcase-fill text-primary me-1"></i> JobHunter</span>
+      <div class="d-flex gap-2 ms-auto">
+        <a href="{{ url_for('home') }}" class="btn btn-sm btn-outline-secondary"><i class="bi bi-house"></i></a>
+        <a href="{{ url_for('jobs') }}" class="btn btn-sm btn-outline-secondary"><i class="bi bi-table"></i></a>
+        <a href="{{ url_for('apply_tracker') }}" class="btn btn-sm btn-outline-secondary"><i class="bi bi-kanban"></i></a>
+        <a href="{{ url_for('companies') }}" class="btn btn-sm btn-outline-secondary"><i class="bi bi-building"></i></a>
+      </div>
+    </nav>
+
+    {% block content %}{% endblock %}
+  </div>
+</div>
+
+<script src="https://cdn.jsdelivr.net/npm/bootstrap@5.3.3/dist/js/bootstrap.bundle.min.js"></script>
+{% block scripts %}{% endblock %}
+
+<script>
+  // Inject current time into sidebar
+  document.querySelectorAll(".sidebar small:last-child").forEach(el => {
+    const d = new Date();
+    el.textContent = d.toLocaleTimeString([], {hour:'2-digit', minute:'2-digit'});
+  });
+</script>
+</body>
+</html>
