@@ -13,8 +13,10 @@ Run:
   py dashboard.py
 """
 
+import json
 import os
 import sys
+import urllib.request
 from datetime import datetime, timedelta, timezone
 
 from dotenv import load_dotenv
@@ -367,6 +369,135 @@ def companies():
         """)).fetchall()
 
     return render_template("companies.html", rows=rows, sort_by=sort_by)
+
+
+# ══════════════════════════════════════════════════════════════════════════════
+# TELEGRAM WEBHOOK  — handles /status, /top10, /help from your bot
+# ══════════════════════════════════════════════════════════════════════════════
+
+_BOT_TOKEN = os.getenv("TELEGRAM_BOT_TOKEN", "")
+
+
+def _tg_send(chat_id, text):
+    """Send a Telegram message using plain HTTP — no extra deps."""
+    if not _BOT_TOKEN:
+        return
+    url  = f"https://api.telegram.org/bot{_BOT_TOKEN}/sendMessage"
+    body = json.dumps({
+        "chat_id": chat_id,
+        "text": text,
+        "parse_mode": "HTML",
+        "disable_web_page_preview": True,
+    }).encode()
+    req = urllib.request.Request(
+        url, data=body, headers={"Content-Type": "application/json"}
+    )
+    try:
+        urllib.request.urlopen(req, timeout=10)
+    except Exception as exc:
+        app.logger.error(f"Telegram send error: {exc}")
+
+
+def _tg_status(chat_id):
+    today_start = datetime.utcnow().replace(hour=0, minute=0, second=0, microsecond=0)
+    with get_session() as session:
+        active      = session.query(func.count(Job.id)).filter(Job.is_active == True).scalar() or 0
+        avg_score   = session.query(func.avg(Job.combined_score)).filter(
+                          Job.is_active == True, Job.combined_score.isnot(None)).scalar()
+        added_today = session.query(func.count(Job.id)).filter(
+                          Job.is_active == True, Job.first_seen >= today_start).scalar() or 0
+        high_conf   = session.query(func.count(Job.id)).filter(
+                          Job.is_active == True, Job.combined_score >= 70).scalar() or 0
+        very_high   = session.query(func.count(Job.id)).filter(
+                          Job.is_active == True, Job.combined_score >= 85).scalar() or 0
+
+    avg_s = f"{avg_score:.1f}" if avg_score else "N/A"
+    now_s = datetime.now().strftime("%d %b %Y, %H:%M")
+    msg = (
+        f"<b>📈 Job Search Status</b>\n"
+        f"🕒 {now_s}\n\n"
+        f"📋 Active jobs:        <b>{active}</b>\n"
+        f"⭐ Avg score:          <b>{avg_s}/100</b>\n"
+        f"🆕 Added today:        <b>{added_today}</b>\n"
+        f"✅ Score ≥70:          <b>{high_conf}</b>\n"
+        f"🚀 Score ≥85:          <b>{very_high}</b>"
+    )
+    _tg_send(chat_id, msg)
+
+
+def _tg_top10(chat_id):
+    with get_session() as session:
+        jobs = (
+            session.query(Job)
+            .filter(Job.is_active == True, Job.combined_score.isnot(None))
+            .order_by(Job.combined_score.desc())
+            .limit(10)
+            .all()
+        )
+
+    if not jobs:
+        _tg_send(chat_id, "No scored jobs found yet.")
+        return
+
+    lines = ["<b>🏆 Top 10 Jobs</b>\n"]
+    for i, job in enumerate(jobs, 1):
+        score   = job.combined_score or 0
+        company = job.company or "Unknown"
+        title   = job.title   or "Unknown"
+        url     = job.url     or "#"
+        lines.append(
+            f"<b>#{i}</b> {score:.0f}/100\n"
+            f"🏢 {company}\n"
+            f"💼 {title}\n"
+            f'🔗 <a href="{url}">Apply Here</a>\n'
+        )
+
+    # Split into chunks to stay under Telegram's 4096-char limit
+    chunk = ""
+    for block in lines:
+        if len(chunk) + len(block) > 3800:
+            _tg_send(chat_id, chunk)
+            chunk = block
+        else:
+            chunk += block
+    if chunk:
+        _tg_send(chat_id, chunk)
+
+
+def _tg_help(chat_id):
+    msg = (
+        "<b>🤖 Job Search Bot — Commands</b>\n\n"
+        "/status  — DB snapshot (job counts, avg score)\n"
+        "/top10   — 10 highest-scoring active jobs\n"
+        "/help    — this message\n\n"
+        "<i>You also receive:</i>\n"
+        "• 🌅 Daily digest at 10:05 (jobs ≥70)\n"
+        "• 🚨 Instant alert every 30 min for jobs ≥85"
+    )
+    _tg_send(chat_id, msg)
+
+
+@app.route("/telegram/webhook", methods=["POST"])
+def telegram_webhook():
+    """Receive updates from Telegram and dispatch bot commands."""
+    update  = request.get_json(silent=True) or {}
+    message = update.get("message") or update.get("edited_message") or {}
+    chat_id = message.get("chat", {}).get("id")
+    text    = (message.get("text") or "").strip()
+
+    if not chat_id or not text:
+        return "ok", 200
+
+    cmd = text.split("@")[0].lower()   # strip @botname suffix e.g. /status@jobbot
+
+    if cmd == "/status":
+        _tg_status(chat_id)
+    elif cmd == "/top10":
+        _tg_top10(chat_id)
+    elif cmd in ("/help", "/start"):
+        _tg_help(chat_id)
+
+    return "ok", 200
 
 
 # ── 404 ───────────────────────────────────────────────────────────────────────
