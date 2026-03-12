@@ -6,7 +6,7 @@ Signal table
 #  Name                 Max pts  Description
 1  career_page_match     25      Job title appears on the company's own careers site
 2  recently_posted       20      date_posted within last 14 days
-3  company_volume        15      Company has 3+ active roles in the DB (real hiring)
+3  company_volume        15      Company NOT known to have <3 active DB roles (benefit of doubt)
 4  not_a_repost          15      Job first_seen within last 30 days (not recycled listing)
 5  url_resolves          10      The apply URL returns HTTP 2xx
 6  has_salary            10      Salary field is populated
@@ -205,8 +205,10 @@ class JobScorer:
             breakdown["recently_posted"] = 0
 
         # Signal 3 — company volume (15 pts)
+        # Benefit of the doubt: award points unless we can positively confirm low volume
+        # (i.e. company IS in DB with fewer than MIN_VOLUME roles — not just unknown).
         vol = self._vol_cache.count(job.company)
-        breakdown["company_volume"] = SIGNAL_WEIGHTS["company_volume"] if vol >= MIN_VOLUME else 0
+        breakdown["company_volume"] = SIGNAL_WEIGHTS["company_volume"] if vol == 0 or vol >= MIN_VOLUME else 0
 
         # Signal 4 — not a repost (15 pts)
         first = job.first_seen
