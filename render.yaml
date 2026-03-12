@@ -1,37 +1,33 @@
 # render.yaml — Render Blueprint for Job Discovery System
 #
-# Services deployed:
-#   • jobsdb          — Managed PostgreSQL 16 (free 90 days)
-#   • job-web         — Flask dashboard (gunicorn, port auto-assigned by Render)
-#   • job-scraper     — Background worker: scrapes every 12h via APScheduler
-#   • job-scorer      — Background worker: scores after each scrape via Redis pub/sub
+# Free-tier layout:
+#   jobsdb              — Managed PostgreSQL (free, 90 days)
+#   job-web             — Flask dashboard, native Python runtime (no Docker)
+#   job-scrape-score    — Cron Job every 12h, Docker (needs Playwright)
+#
+# Why native Python for job-web?
+#   The Docker image includes Playwright + Chromium (~400 MB) which the
+#   dashboard never uses. Native Python gives a 10x faster build and avoids
+#   Render free-tier build timeouts.
 #
 # Redis:
-#   Render has no free Redis tier. Create a free Upstash Redis instance at
-#   https://upstash.com and paste the "REDIS_URL" (redis://...) into the
-#   environment variable below (sync: false means you set it in the Render
-#   dashboard after first deploy).
-#
-# Deploy:
-#   1. Push this repo to GitHub
-#   2. Go to https://dashboard.render.com → New → Blueprint
-#   3. Connect the repo — Render reads this file automatically
-#   4. Set the "sync: false" env vars in the Render dashboard
+#   Create a free Upstash Redis at https://upstash.com → TCP tab → copy URL.
+#   Paste it as REDIS_URL in the Render dashboard after first deploy.
 
 databases:
   - name: jobsdb
     databaseName: jobsdb
     user: jobsuser
-    plan: free          # 256 MB RAM, 1 GB storage — expires after 90 days
+    plan: free
 
 services:
-  # ── Web dashboard ─────────────────────────────────────────────────────────
+  # ── Web dashboard — native Python (no Docker, no Playwright) ──────────────
   - type: web
     name: job-web
-    env: docker
-    dockerfilePath: ./Dockerfile
-    dockerCommand: gunicorn --workers 2 --bind "0.0.0.0:$PORT" --timeout 120 dashboard:app
-    plan: free          # Spins down after 15 min inactivity on free tier
+    env: python
+    buildCommand: pip install -r requirements-web.txt
+    startCommand: gunicorn --workers 2 --bind "0.0.0.0:$PORT" --timeout 120 dashboard:app
+    plan: free
     healthCheckPath: /
     envVars:
       - key: DATABASE_URL
@@ -39,39 +35,21 @@ services:
           name: jobsdb
           property: connectionString
       - key: REDIS_URL
-        sync: false     # Set this to your Upstash Redis URL in the Render dashboard
+        sync: false       # Paste your Upstash rediss://... URL
       - key: OPENAI_API_KEY
-        sync: false     # Optional — only needed for AI scoring
+        sync: false       # Optional — only for AI scoring
       - key: FLASK_ENV
         value: production
       - key: RENDER
         value: "true"
 
-  # ── Scraper background worker ──────────────────────────────────────────────
-  - type: worker
-    name: job-scraper
+  # ── Scrape + Score Cron Job — Docker (Playwright needed for scraping) ──────
+  - type: cron
+    name: job-scrape-score
     env: docker
     dockerfilePath: ./Dockerfile
-    dockerCommand: python services/scraper_loop.py
-    plan: free
-    envVars:
-      - key: DATABASE_URL
-        fromDatabase:
-          name: jobsdb
-          property: connectionString
-      - key: REDIS_URL
-        sync: false
-      - key: SCRAPE_INTERVAL_HOURS
-        value: "12"
-      - key: SCRAPE_SOURCES
-        value: all
-
-  # ── Scorer background worker ───────────────────────────────────────────────
-  - type: worker
-    name: job-scorer
-    env: docker
-    dockerfilePath: ./Dockerfile
-    dockerCommand: python services/scorer_loop.py
+    dockerCommand: sh -c "python run_all.py && python score_jobs.py --rescore"
+    schedule: "0 */12 * * *"    # 00:00 and 12:00 UTC every day
     plan: free
     envVars:
       - key: DATABASE_URL
@@ -83,6 +61,4 @@ services:
       - key: OPENAI_API_KEY
         sync: false
       - key: AI_SCORE_ENABLED
-        value: "false"   # Set to "true" if you want GPT scoring (costs money)
-      - key: SCORER_FALLBACK_HOURS
-        value: "13"      # Re-score even if pub/sub event was missed
+        value: "false"
