@@ -1,0 +1,63 @@
+name: Telegram Notifications
+
+on:
+  schedule:
+    # Daily digest -- 09:05 UTC (10:05 Irish time / BST offset)
+    - cron: "5 9 * * *"
+    # Alert poller -- every 30 minutes around the clock
+    - cron: "*/30 * * * *"
+  workflow_dispatch:
+    inputs:
+      mode:
+        description: "Which notification to send"
+        required: true
+        default: "alerts"
+        type: choice
+        options:
+          - digest
+          - alerts
+
+jobs:
+  notify:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+
+    env:
+      DATABASE_URL:         ${{ secrets.DATABASE_URL }}
+      REDIS_URL:            ${{ secrets.REDIS_URL }}
+      OPENAI_API_KEY:       ${{ secrets.OPENAI_API_KEY }}
+      TELEGRAM_BOT_TOKEN:   ${{ secrets.TELEGRAM_BOT_TOKEN }}
+      TELEGRAM_CHAT_ID:     ${{ secrets.TELEGRAM_CHAT_ID }}
+
+    steps:
+      - name: Checkout repo
+        uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+          cache: "pip"
+
+      - name: Install dependencies (no Playwright needed)
+        run: pip install -r requirements-notify.txt
+
+      - name: Determine mode
+        id: mode
+        run: |
+          # workflow_dispatch overrides the schedule logic
+          if [ "${{ github.event_name }}" = "workflow_dispatch" ]; then
+            echo "mode=${{ github.event.inputs.mode }}" >> $GITHUB_OUTPUT
+          else
+            # 09:05 UTC cron => digest; all other times => alerts
+            MINUTE=$(date -u +%M)
+            HOUR=$(date -u +%H)
+            if [ "$HOUR" = "09" ] && [ "$MINUTE" -lt "15" ]; then
+              echo "mode=digest" >> $GITHUB_OUTPUT
+            else
+              echo "mode=alerts" >> $GITHUB_OUTPUT
+            fi
+          fi
+
+      - name: Send notification
+        run: python tg_notify.py --${{ steps.mode.outputs.mode }}
