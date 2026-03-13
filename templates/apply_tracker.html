@@ -1,181 +1,90 @@
 {% extends "base.html" %}
-{% block title %}Apply Tracker{% endblock %}
-
-{% block head %}
-<style>
-  .kanban-wrap {
-    display: flex;
-    gap: 1rem;
-    overflow-x: auto;
-    padding-bottom: .5rem;
-    min-height: 60vh;
-  }
-  .kanban-col {
-    flex: 0 0 230px;
-    min-width: 230px;
-  }
-  .kanban-col-count {
-    font-size: .7rem;
-    background: rgba(255,255,255,.1);
-    border-radius: 99px;
-    padding: .15em .6em;
-    font-weight: 600;
-  }
-  .notes-area { resize: vertical; min-height: 60px; font-size: .8rem; }
-
-  /* Status colour map */
-  .kh-saved     { background: rgba(108,117,125,.25); color: #adb5bd; }
-  .kh-applied   { background: rgba(13,110,253,.2);   color: #6ea8fe; }
-  .kh-interview { background: rgba(255,193,7,.2);    color: #ffc107; }
-  .kh-offer     { background: rgba(25,135,84,.25);   color: #75b798; }
-  .kh-rejected  { background: rgba(220,53,69,.2);    color: #ea868f; }
-</style>
-{% endblock %}
+{% block title %}Application Tracker — Job Discovery{% endblock %}
 
 {% block content %}
-<div class="d-flex align-items-center justify-content-between mb-4">
-  <div>
-    <h1 class="h3 fw-bold mb-0">Apply Tracker</h1>
-    <p class="text-muted mb-0 small">Track your job applications through the hiring funnel</p>
-  </div>
-  <a href="{{ url_for('jobs') }}" class="btn btn-outline-primary btn-sm">
-    <i class="bi bi-plus-circle me-1"></i>Add from Jobs
-  </a>
+
+<div class="d-flex justify-content-between align-items-center mb-3">
+    <h5 class="mb-0 fw-bold"><i class="bi bi-kanban me-2"></i>Application Tracker</h5>
+    <span class="text-muted" style="font-size:0.8rem">
+        Track your job applications through the hiring process
+    </span>
 </div>
 
-<!-- Summary strip -->
-<div class="d-flex gap-2 mb-3 flex-wrap">
-  {% set status_icons = {'saved': 'bi-bookmark', 'applied': 'bi-send', 'interview': 'bi-calendar-check', 'offer': 'bi-trophy', 'rejected': 'bi-x-circle'} %}
-  {% for s in statuses %}
-  <span class="badge kh-{{ s }} py-2 px-3">
-    <i class="bi {{ status_icons[s] }} me-1"></i>
-    {{ s | title }}
-    <span class="kanban-col-count ms-1">{{ columns[s] | length }}</span>
-  </span>
-  {% endfor %}
-</div>
+<!-- ─── Kanban columns ──────────────────────────────────── -->
+<div class="row g-2" style="min-height:60vh">
 
-<!-- Kanban board -->
-<div class="kanban-wrap" id="tracker-board">
+    {% set status_config = {
+        'saved':     {'icon': '📌', 'color': '#64748b', 'title': 'Saved'},
+        'applied':   {'icon': '📤', 'color': '#3b82f6', 'title': 'Applied'},
+        'interview': {'icon': '💬', 'color': '#f59e0b', 'title': 'Interview'},
+        'offer':     {'icon': '🎉', 'color': '#22c55e', 'title': 'Offer'},
+        'rejected':  {'icon': '❌', 'color': '#ef4444', 'title': 'Rejected'},
+    } %}
 
-  {% set status_labels = {'saved': 'Saved', 'applied': 'Applied', 'interview': 'Interview', 'offer': 'Offer', 'rejected': 'Rejected'} %}
-  {% set next_status  = {'saved': 'applied', 'applied': 'interview', 'interview': 'offer', 'offer': None, 'rejected': None} %}
-  {% set prev_status  = {'saved': None, 'applied': 'saved', 'interview': 'applied', 'offer': 'interview', 'rejected': 'interview'} %}
-
-  {% for s in statuses %}
-  <div class="kanban-col">
-    <!-- Column header -->
-    <div class="kanban-col-header kh-{{ s }} d-flex justify-content-between align-items-center">
-      <span><i class="bi {{ status_icons[s] }} me-1"></i>{{ status_labels[s] }}</span>
-      <span class="kanban-col-count">{{ columns[s] | length }}</span>
+    {% for status in statuses %}
+    {% set cfg = status_config[status] %}
+    <div class="col">
+        <div class="kanban-col">
+            <div class="kanban-col-header" style="color:{{ cfg.color }}">
+                {{ cfg.icon }} {{ cfg.title }}
+                {% if columns[status] is defined %}
+                <span class="badge rounded-pill ms-1"
+                      style="background:{{ cfg.color }}20;color:{{ cfg.color }};font-size:0.65rem">
+                    {{ columns[status]|length }}
+                </span>
+                {% endif %}
+            </div>
+            <div class="kanban-cards">
+                {% if columns[status] is defined %}
+                    {% for tracker, job in columns[status] %}
+                    <div class="kanban-card" onclick="window.location='/jobs/{{ job.id }}'">
+                        <div class="fw-medium mb-1" style="font-size:0.82rem;line-height:1.3">
+                            {{ job.title[:50] }}{% if job.title|length > 50 %}…{% endif %}
+                        </div>
+                        <div class="text-muted mb-1" style="font-size:0.75rem">
+                            <i class="bi bi-building me-1"></i>{{ job.company[:30] }}
+                        </div>
+                        <div class="d-flex align-items-center justify-content-between">
+                            {% if job.legitimacy_score is not none %}
+                                {% if job.legitimacy_score >= 85 %}
+                                    <span class="score-badge score-very-high" style="font-size:0.65rem">{{ job.legitimacy_score }}</span>
+                                {% elif job.legitimacy_score >= 70 %}
+                                    <span class="score-badge score-high" style="font-size:0.65rem">{{ job.legitimacy_score }}</span>
+                                {% else %}
+                                    <span class="score-badge score-medium" style="font-size:0.65rem">{{ job.legitimacy_score }}</span>
+                                {% endif %}
+                            {% else %}
+                                <span class="score-badge score-unscored" style="font-size:0.65rem">—</span>
+                            {% endif %}
+                            <span class="text-muted" style="font-size:0.68rem">
+                                {{ tracker.updated_at | timeago if tracker.updated_at else '' }}
+                            </span>
+                        </div>
+                        {% if tracker.notes %}
+                        <div class="mt-1 text-muted" style="font-size:0.72rem;
+                             overflow:hidden;display:-webkit-box;-webkit-line-clamp:2;-webkit-box-orient:vertical">
+                            {{ tracker.notes }}
+                        </div>
+                        {% endif %}
+                    </div>
+                    {% else %}
+                    <div class="text-center text-muted py-4" style="font-size:0.78rem">
+                        <i class="bi bi-inbox d-block mb-1"></i>
+                        No applications
+                    </div>
+                    {% endfor %}
+                {% endif %}
+            </div>
+        </div>
     </div>
-
-    <!-- Cards -->
-    {% if columns[s] %}
-      {% for item in columns[s] %}
-      {% set entry = item.entry %}
-      {% set job   = item.job %}
-      {% set sc    = job.combined_score | round(0) | int if job.combined_score is not none else 0 %}
-      <div class="kanban-card">
-        <!-- Title + company -->
-        <a href="{{ url_for('job_detail', job_id=job.id) }}"
-           class="text-white text-decoration-none fw-semibold d-block mb-0"
-           style="font-size:.85rem; line-height:1.3">
-          {{ job.title | truncate(45, True) }}
-        </a>
-        <div class="text-muted" style="font-size:.75rem">{{ job.company | truncate(30, True) }}</div>
-
-        <!-- Score + source -->
-        <div class="d-flex align-items-center gap-2 mt-1 mb-2">
-          {% if job.combined_score is not none %}
-          <span class="score-pill bg-{{ sc | score_class }}-subtle text-{{ sc | score_class }}" style="font-size:.68rem">
-            {{ sc }}
-          </span>
-          {% endif %}
-          <span class="badge bg-dark text-muted border border-secondary" style="font-size:.65rem">{{ job.source }}</span>
-          {% if entry.applied_at %}
-          <span class="text-muted" style="font-size:.68rem">Applied {{ entry.applied_at.strftime('%b %d') }}</span>
-          {% endif %}
-        </div>
-
-        <!-- Notes (collapsible) -->
-        <details class="mb-2">
-          <summary class="text-muted" style="font-size:.72rem; cursor:pointer">
-            <i class="bi bi-pencil me-1"></i>{{ 'Edit notes' if entry.notes else 'Add notes' }}
-          </summary>
-          <form action="{{ url_for('tracker_notes', entry_id=entry.id) }}" method="POST"
-                hx-post="{{ url_for('tracker_notes', entry_id=entry.id) }}"
-                hx-swap="none"
-                class="mt-1">
-            <textarea class="form-control form-control-sm bg-dark border-secondary text-white notes-area"
-                      name="notes">{{ entry.notes or '' }}</textarea>
-            <button type="submit" class="btn btn-sm btn-outline-success mt-1 py-0">Save</button>
-          </form>
-        </details>
-        {% if entry.notes and entry.notes | length %}
-        <div class="text-muted" style="font-size:.72rem; white-space:pre-wrap">{{ entry.notes | truncate(80, True) }}</div>
-        {% endif %}
-
-        <!-- Move buttons -->
-        <div class="d-flex gap-1 flex-wrap mt-2 pt-2 border-top border-secondary">
-          {% if prev_status[s] %}
-          <form action="{{ url_for('tracker_move', entry_id=entry.id, new_status=prev_status[s]) }}" method="POST">
-            <button type="submit" class="btn btn-sm btn-outline-secondary py-0 px-1" title="Move to {{ prev_status[s] | title }}">
-              <i class="bi bi-arrow-left"></i>
-            </button>
-          </form>
-          {% endif %}
-
-          {% if next_status[s] %}
-          <form action="{{ url_for('tracker_move', entry_id=entry.id, new_status=next_status[s]) }}" method="POST">
-            <button type="submit" class="btn btn-sm btn-outline-primary py-0 px-2" title="Move to {{ next_status[s] | title }}">
-              {{ next_status[s] | title }} <i class="bi bi-arrow-right ms-1"></i>
-            </button>
-          </form>
-          {% endif %}
-
-          {% if s != 'rejected' %}
-          <form action="{{ url_for('tracker_move', entry_id=entry.id, new_status='rejected') }}" method="POST">
-            <button type="submit" class="btn btn-sm btn-outline-danger py-0 px-1 ms-auto" title="Mark rejected">
-              <i class="bi bi-x-lg"></i>
-            </button>
-          </form>
-          {% endif %}
-
-          <form action="{{ url_for('tracker_remove', entry_id=entry.id) }}" method="POST" class="ms-auto">
-            <button type="submit"
-                    class="btn btn-sm btn-outline-secondary py-0 px-1"
-                    title="Remove from tracker"
-                    onclick="return confirm('Remove this job from the tracker?')">
-              <i class="bi bi-trash3"></i>
-            </button>
-          </form>
-        </div>
-      </div>
-      {% endfor %}
-    {% else %}
-      <div class="text-center text-muted py-4" style="font-size:.8rem; border: 1px dashed rgba(255,255,255,.1); border-radius:.5rem">
-        <i class="bi bi-inbox d-block mb-1" style="font-size:1.5rem; opacity:.3"></i>
-        No jobs here
-      </div>
-    {% endif %}
-  </div>
-  {% endfor %}
+    {% endfor %}
 
 </div>
 
-<!-- Empty state -->
-{% set total_tracked = 0 %}
-{% for s in statuses %}{% set total_tracked = total_tracked + columns[s] | length %}{% endfor %}
-{% if total_tracked == 0 %}
-<div class="text-center py-5 mt-3">
-  <i class="bi bi-kanban text-muted d-block mb-2" style="font-size:3rem; opacity:.3"></i>
-  <h5 class="text-muted">No jobs in tracker yet</h5>
-  <p class="text-muted">Browse jobs and click <strong>Add to Tracker</strong> to start tracking your applications.</p>
-  <a href="{{ url_for('jobs') }}" class="btn btn-primary">
-    <i class="bi bi-table me-1"></i>Browse Jobs
-  </a>
+<div class="text-center mt-3 text-muted" style="font-size:0.78rem">
+    <i class="bi bi-info-circle me-1"></i>
+    Click any card to view the job and update its status.
+    Track your progress from saved → applied → interview → offer.
 </div>
-{% endif %}
 
 {% endblock %}

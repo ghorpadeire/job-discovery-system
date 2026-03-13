@@ -1,86 +1,15 @@
-# ─────────────────────────────────────────────────────────────────────────────
-# Job Discovery System — .gitignore
-# ─────────────────────────────────────────────────────────────────────────────
-
-# ── Secrets / environment ─────────────────────────────────────────────────────
 .env
-*.env
-!.env.example
-
-# ── Python ────────────────────────────────────────────────────────────────────
 __pycache__/
-*.py[cod]
-*$py.class
+*.pyc
 *.pyo
+*.pyd
 .Python
 *.egg-info/
 dist/
 build/
-eggs/
-parts/
-var/
-*.egg
-MANIFEST
-
-# ── Virtual environments ──────────────────────────────────────────────────────
-.venv/
-venv/
-env/
-ENV/
-.virtualenv/
-
-# ── Testing / coverage ────────────────────────────────────────────────────────
 .pytest_cache/
 .coverage
-coverage.xml
 htmlcov/
-.tox/
-.nox/
-
-# ── Logs & runtime data ───────────────────────────────────────────────────────
 *.log
-logs/
-*.pid
-*.sock
-/tmp/
-
-# ── Playwright ────────────────────────────────────────────────────────────────
-# Playwright downloads its own browser binaries; no need to commit them
-playwright/.local-browsers/
-
-# ── Claude Code ───────────────────────────────────────────────────────────────
-.claude/
-
-# ── Debug / scratch HTML ──────────────────────────────────────────────────────
-debug_*.html
-
-# ── IDE / editors ─────────────────────────────────────────────────────────────
-.idea/
-.vscode/
-*.swp
-*.swo
-*~
 .DS_Store
 Thumbs.db
-
-# ── Docker ────────────────────────────────────────────────────────────────────
-# Don't ignore docker-compose or Dockerfile — they are committed
-
-# ── Database snapshots / backups ──────────────────────────────────────────────
-*.sql.gz
-*.dump
-backups/
-
-# ── Jupyter / notebooks ───────────────────────────────────────────────────────
-.ipynb_checkpoints/
-*.ipynb
-
-# ── OS ────────────────────────────────────────────────────────────────────────
-.DS_Store
-.DS_Store?
-._*
-.Spotlight-V100
-.Trashes
-ehthumbs.db
-Thumbs.db
-Desktop.ini

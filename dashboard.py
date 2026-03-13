@@ -1,522 +1,575 @@
-# -*- coding: utf-8 -*-
 """
-dashboard.py — Flask web dashboard for the Job Discovery System.
+dashboard.py — Flask web dashboard + Telegram webhook handler.
 
-Pages:
-  /               Home: live stats overview
-  /jobs           Filterable + sortable jobs table (HTMX live filtering)
-  /job/<id>       Full job detail, score breakdown, AI analysis
-  /apply-tracker  Kanban board (Saved → Applied → Interview → Offer → Rejected)
-  /companies      Company credibility overview
+Routes:
+  GET  /                → Home (stats + top jobs)
+  GET  /jobs            → Full filterable jobs table
+  GET  /jobs/partial    → HTMX partial for live filtering
+  GET  /jobs/<id>       → Job detail with score breakdown
+  POST /jobs/<id>/track → Update application tracker
+  GET  /tracker         → Kanban board
+  GET  /companies       → Company credibility table
+  POST /telegram/webhook → Telegram webhook handler
 
-Run:
-  py dashboard.py
+Run locally:  py dashboard.py
+Production:   gunicorn dashboard:app --bind 0.0.0.0:$PORT --workers 1 --timeout 120
 """
-
 import json
+import logging
 import os
-import sys
 import urllib.request
-from datetime import datetime, timedelta, timezone
+from datetime import datetime, timezone, timedelta
+from functools import lru_cache
 
 from dotenv import load_dotenv
-from flask import Flask, jsonify, redirect, render_template, request, url_for
-from sqlalchemy import func, text
+from flask import Flask, render_template, request, jsonify, abort
+from sqlalchemy import func
+from sqlalchemy.orm import sessionmaker
 
 load_dotenv()
 
-# ── App setup ─────────────────────────────────────────────────────────────────
-app = Flask(__name__, template_folder="templates")
-app.secret_key = os.urandom(24)
+logging.basicConfig(
+    level=logging.INFO,
+    format="%(asctime)s [%(levelname)s] %(name)s: %(message)s",
+)
+logger = logging.getLogger("dashboard")
 
-# ── DB imports (lazy to avoid import-order issues) ────────────────────────────
-from core.database import get_engine, get_session
-from core.models import ApplicationTracker, Job, TRACKER_STATUSES, migrate_tracker_table
-
-# Ensure tracker table exists at import time (safe: checkfirst=True).
-# Runs under both `py dashboard.py` and `gunicorn dashboard:app`.
-migrate_tracker_table(get_engine())
-
-# ── Helpers ───────────────────────────────────────────────────────────────────
-
-def _score_class(score):
-    """Bootstrap colour class based on combined/legitimacy score (0-100)."""
-    if score is None:
-        return "secondary"
-    if score >= 70:
-        return "success"
-    if score >= 40:
-        return "warning"
-    return "danger"
+app = Flask(__name__)
+app.secret_key = os.getenv("FLASK_SECRET", "dev-secret-change-me-in-prod")
 
 
-def _score_pct(score, max_val=100):
-    """Clamp score to 0-100 for progress bars."""
-    if score is None:
-        return 0
-    return max(0, min(100, round(score / max_val * 100)))
+# ─────────────────────────────────────────────
+#  DB helpers
+# ─────────────────────────────────────────────
+
+def _get_engine():
+    from core.database import get_engine
+    return get_engine()
 
 
-def _relative_date(dt):
-    """Human-friendly relative timestamp."""
-    if dt is None:
-        return "—"
-    now = datetime.utcnow()
-    diff = now - dt
-    if diff.total_seconds() < 3600:
-        return "just now"
-    if diff.days == 0:
-        return f"{int(diff.total_seconds() // 3600)}h ago"
-    if diff.days == 1:
-        return "yesterday"
-    return f"{diff.days}d ago"
+def _new_session():
+    engine = _get_engine()
+    Session = sessionmaker(bind=engine)
+    return Session()
 
 
-app.jinja_env.filters["score_class"] = _score_class
-app.jinja_env.filters["score_pct"] = _score_pct
-app.jinja_env.filters["relative_date"] = _relative_date
+# ─────────────────────────────────────────────
+#  Stats helper
+# ─────────────────────────────────────────────
 
+def _get_stats(session) -> dict:
+    from core.models import Job
+    today = datetime.now(timezone.utc).replace(hour=0, minute=0, second=0, microsecond=0)
 
-# ── Route helpers ──────────────────────────────────────────────────────────────
+    total   = session.query(func.count(Job.id)).filter(Job.is_active == True).scalar() or 0
+    avg_s   = session.query(func.avg(Job.legitimacy_score)).filter(
+        Job.is_active == True, Job.legitimacy_score != None
+    ).scalar()
+    high    = session.query(func.count(Job.id)).filter(
+        Job.is_active == True, Job.legitimacy_score >= 70
+    ).scalar() or 0
+    v_high  = session.query(func.count(Job.id)).filter(
+        Job.is_active == True, Job.legitimacy_score >= 85
+    ).scalar() or 0
+    ghosts  = session.query(func.count(Job.id)).filter(
+        Job.is_active == True, Job.suspected_ghost == True
+    ).scalar() or 0
+    new_today = session.query(func.count(Job.id)).filter(
+        Job.is_active == True, Job.first_seen >= today
+    ).scalar() or 0
 
-def _apply_job_filters(query, args):
-    """Apply URL query params as SQLAlchemy filters to a Job query."""
-    min_score = args.get("min_score", type=float)
-    max_score = args.get("max_score", type=float)
-    company   = args.get("company", "").strip()
-    source    = args.get("source", "").strip()
-    days_back = args.get("days_back", type=int)
-    show_ghost = args.get("show_ghost", "")          # "1" = only ghosts
-    scored_only = args.get("scored_only", "")        # "1" = only scored
-    sort_by   = args.get("sort_by", "combined_score")
+    ij_count = session.query(func.count(Job.id)).filter(
+        Job.is_active == True, Job.source == "irishjobs"
+    ).scalar() or 0
+    ind_count = session.query(func.count(Job.id)).filter(
+        Job.is_active == True, Job.source == "indeed"
+    ).scalar() or 0
 
-    if min_score is not None:
-        query = query.filter(Job.combined_score >= min_score)
-    if max_score is not None:
-        query = query.filter(Job.combined_score <= max_score)
-    if company:
-        query = query.filter(Job.company.ilike(f"%{company}%"))
-    if source:
-        query = query.filter(Job.source == source)
-    if days_back:
-        cutoff = datetime.utcnow() - timedelta(days=days_back)
-        query = query.filter(Job.first_seen >= cutoff)
-    if show_ghost == "1":
-        query = query.filter(Job.suspected_ghost == True)
-    if scored_only == "1":
-        query = query.filter(Job.combined_score.isnot(None))
-
-    # Sorting
-    sort_map = {
-        "combined_score":   Job.combined_score.desc().nullslast(),
-        "legitimacy_score": Job.legitimacy_score.desc().nullslast(),
-        "relevance_score":  Job.relevance_score.desc().nullslast(),
-        "first_seen":       Job.first_seen.desc(),
-        "company":          Job.company.asc(),
+    return {
+        "total": total,
+        "avg_score": round(avg_s, 1) if avg_s else None,
+        "high": high,
+        "v_high": v_high,
+        "ghosts": ghosts,
+        "new_today": new_today,
+        "irishjobs": ij_count,
+        "indeed": ind_count,
     }
-    order_col = sort_map.get(sort_by, Job.combined_score.desc().nullslast())
-    query = query.order_by(order_col)
-    return query
 
 
-# ══════════════════════════════════════════════════════════════════════════════
-# ROUTES
-# ══════════════════════════════════════════════════════════════════════════════
+# ─────────────────────────────────────────────
+#  Routes
+# ─────────────────────────────────────────────
 
-# ── / ─────────────────────────────────────────────────────────────────────────
 @app.route("/")
-def home():
-    with get_session() as session:
-        total_active  = session.query(func.count(Job.id)).filter(Job.is_active == True).scalar() or 0
-        avg_legit     = session.query(func.avg(Job.legitimacy_score)).filter(
-                            Job.is_active == True, Job.legitimacy_score.isnot(None)).scalar()
-        avg_legit     = round(avg_legit, 1) if avg_legit else None
-        avg_combined  = session.query(func.avg(Job.combined_score)).filter(
-                            Job.is_active == True, Job.combined_score.isnot(None)).scalar()
-        avg_combined  = round(avg_combined, 1) if avg_combined else None
-
-        cutoff_today  = datetime.utcnow() - timedelta(hours=24)
-        added_today   = session.query(func.count(Job.id)).filter(
-                            Job.first_seen >= cutoff_today).scalar() or 0
-
-        ghost_count   = session.query(func.count(Job.id)).filter(
-                            Job.is_active == True, Job.suspected_ghost == True).scalar() or 0
-
-        high_conf     = session.query(func.count(Job.id)).filter(
-                            Job.is_active == True, Job.combined_score >= 70).scalar() or 0
-
-        scored_count  = session.query(func.count(Job.id)).filter(
-                            Job.is_active == True, Job.combined_score.isnot(None)).scalar() or 0
-
-        in_tracker    = session.query(func.count(ApplicationTracker.id)).scalar() or 0
-
-        # Top 5 recent high-score jobs
+def index():
+    session = _new_session()
+    try:
+        from core.models import Job
+        stats = _get_stats(session)
         top_jobs = (
             session.query(Job)
-            .filter(Job.is_active == True, Job.combined_score.isnot(None))
-            .order_by(Job.combined_score.desc())
-            .limit(8)
+            .filter(Job.is_active == True, Job.legitimacy_score != None)
+            .order_by(Job.legitimacy_score.desc())
+            .limit(10)
             .all()
         )
-
-        # Scores by source
-        source_stats = session.execute(text("""
-            SELECT source,
-                   COUNT(*)                           AS cnt,
-                   AVG(combined_score)                AS avg_combined
-            FROM jobs
-            WHERE is_active = TRUE AND combined_score IS NOT NULL
-            GROUP BY source
-            ORDER BY cnt DESC
-        """)).fetchall()
-
-    return render_template(
-        "index.html",
-        total_active=total_active,
-        avg_legit=avg_legit,
-        avg_combined=avg_combined,
-        added_today=added_today,
-        ghost_count=ghost_count,
-        high_conf=high_conf,
-        scored_count=scored_count,
-        in_tracker=in_tracker,
-        top_jobs=top_jobs,
-        source_stats=source_stats,
-    )
+        return render_template("index.html", stats=stats, top_jobs=top_jobs)
+    except Exception as exc:
+        logger.error("index error: %s", exc)
+        return render_template("index.html", stats={}, top_jobs=[], error=str(exc))
+    finally:
+        session.close()
 
 
-# ── /jobs ─────────────────────────────────────────────────────────────────────
 @app.route("/jobs")
 def jobs():
-    """Full jobs page — initial load."""
-    # Distinct sources for filter dropdown
-    with get_session() as session:
-        sources = [r[0] for r in session.execute(
-            text("SELECT DISTINCT source FROM jobs WHERE source IS NOT NULL ORDER BY source")
-        ).fetchall()]
-        total = session.query(func.count(Job.id)).filter(Job.is_active == True).scalar() or 0
-
-    return render_template("jobs.html", sources=sources, total=total, args=request.args)
+    return render_template("jobs.html")
 
 
-@app.route("/jobs/rows")
-def jobs_rows():
-    """HTMX partial — returns only the <tbody> rows."""
-    with get_session() as session:
-        q = session.query(Job).filter(Job.is_active == True)
-        q = _apply_job_filters(q, request.args)
-        jobs_list = q.limit(200).all()
-        count = q.count()
+@app.route("/jobs/partial")
+def jobs_partial():
+    session = _new_session()
+    try:
+        from core.models import Job
 
-    return render_template("partials/jobs_rows.html", jobs=jobs_list, count=count)
+        q        = request.args.get("q", "").strip()
+        min_score = int(request.args.get("min_score", 0) or 0)
+        source   = request.args.get("source", "")
+        ghost    = request.args.get("ghost", "")
+        sort     = request.args.get("sort", "score")
+        page     = int(request.args.get("page", 1) or 1)
+        per_page = 25
+
+        query = session.query(Job).filter(Job.is_active == True)
+
+        if q:
+            query = query.filter(
+                Job.title.ilike(f"%{q}%") | Job.company.ilike(f"%{q}%")
+            )
+        if min_score:
+            query = query.filter(Job.legitimacy_score >= min_score)
+        if source in ("irishjobs", "indeed"):
+            query = query.filter(Job.source == source)
+        if ghost == "true":
+            query = query.filter(Job.suspected_ghost == True)
+        elif ghost == "false":
+            query = query.filter(Job.suspected_ghost == False)
+
+        if sort == "score":
+            query = query.order_by(Job.legitimacy_score.desc().nulls_last())
+        elif sort == "date":
+            query = query.order_by(Job.first_seen.desc())
+        elif sort == "company":
+            query = query.order_by(Job.company.asc())
+
+        total  = query.count()
+        offset = (page - 1) * per_page
+        jobs_page = query.offset(offset).limit(per_page).all()
+
+        return render_template(
+            "partials/jobs_rows.html",
+            jobs=jobs_page,
+            total=total,
+            page=page,
+            per_page=per_page,
+        )
+    except Exception as exc:
+        logger.error("jobs_partial error: %s", exc)
+        return f"<tr><td colspan='8'>Error loading jobs: {exc}</td></tr>", 500
+    finally:
+        session.close()
 
 
-# ── /job/<id> ─────────────────────────────────────────────────────────────────
-@app.route("/job/<int:job_id>")
-def job_detail(job_id):
-    with get_session() as session:
-        job = session.get(Job, job_id)
-        if job is None:
-            return render_template("404.html"), 404
+@app.route("/jobs/<int:job_id>")
+def job_detail(job_id: int):
+    session = _new_session()
+    try:
+        from core.models import Job, ApplicationTracker, VALID_STATUSES
+        job = session.query(Job).filter(Job.id == job_id).first()
+        if not job:
+            abort(404)
 
-        tracker = session.query(ApplicationTracker).filter_by(job_id=job_id).first()
+        tracker = session.query(ApplicationTracker).filter(
+            ApplicationTracker.job_id == job_id
+        ).first()
 
-    # Parse score breakdown for display
-    breakdown = {}
-    signal_max = {
-        "career_page_match": 25,
-        "recently_posted":   20,
-        "company_volume":    15,
-        "not_a_repost":      15,
-        "url_resolves":      10,
-        "has_salary":        10,
-        "rich_description":   5,
-    }
-    if job.score_breakdown:
-        for signal, pts in job.score_breakdown.items():
-            breakdown[signal] = {
-                "pts":     pts,
-                "max":     signal_max.get(signal, 10),
-                "pct":     _score_pct(pts, signal_max.get(signal, 10)),
-                "label":   signal.replace("_", " ").title(),
-                "earned":  pts > 0,
-            }
+        # Build signal breakdown display data
+        from core.scorer import SIGNAL_WEIGHTS
+        signals = []
+        breakdown = job.score_breakdown or {}
+        for signal, max_pts in SIGNAL_WEIGHTS.items():
+            earned = breakdown.get(signal, 0)
+            signals.append({
+                "name": signal.replace("_", " ").title(),
+                "key": signal,
+                "earned": earned,
+                "max": max_pts,
+                "hit": earned > 0,
+                "pct": int(earned / max_pts * 100) if max_pts else 0,
+            })
 
-    return render_template(
-        "job_detail.html",
-        job=job,
-        tracker=tracker,
-        breakdown=breakdown,
-        statuses=TRACKER_STATUSES,
-    )
+        return render_template(
+            "job_detail.html",
+            job=job,
+            tracker=tracker,
+            signals=signals,
+            valid_statuses=VALID_STATUSES,
+        )
+    except Exception as exc:
+        logger.error("job_detail error: %s", exc)
+        abort(500)
+    finally:
+        session.close()
 
 
-# ── /apply-tracker ────────────────────────────────────────────────────────────
-@app.route("/apply-tracker")
-def apply_tracker():
-    with get_session() as session:
+@app.route("/jobs/<int:job_id>/track", methods=["POST"])
+def track_job(job_id: int):
+    session = _new_session()
+    try:
+        from core.models import Job, ApplicationTracker, VALID_STATUSES
+
+        job = session.query(Job).filter(Job.id == job_id).first()
+        if not job:
+            return jsonify({"error": "Job not found"}), 404
+
+        status = request.form.get("status", "saved")
+        if status not in VALID_STATUSES:
+            return jsonify({"error": f"Invalid status. Valid: {VALID_STATUSES}"}), 400
+        notes = request.form.get("notes", "")
+
+        tracker = session.query(ApplicationTracker).filter(
+            ApplicationTracker.job_id == job_id
+        ).first()
+
+        if tracker:
+            tracker.status     = status
+            tracker.notes      = notes
+            tracker.updated_at = datetime.now(timezone.utc)
+            if status == "applied" and not tracker.applied_at:
+                tracker.applied_at = datetime.now(timezone.utc)
+        else:
+            tracker = ApplicationTracker(
+                job_id     = job_id,
+                status     = status,
+                notes      = notes,
+                applied_at = datetime.now(timezone.utc) if status == "applied" else None,
+            )
+            session.add(tracker)
+
+        session.commit()
+        return jsonify({"success": True, "status": status})
+
+    except Exception as exc:
+        session.rollback()
+        logger.error("track_job error: %s", exc)
+        return jsonify({"error": str(exc)}), 500
+    finally:
+        session.close()
+
+
+@app.route("/tracker")
+def tracker():
+    session = _new_session()
+    try:
+        from core.models import ApplicationTracker, Job, VALID_STATUSES
+
+        all_statuses = VALID_STATUSES
+        columns = {}
+        for status in all_statuses:
+            items = (
+                session.query(ApplicationTracker, Job)
+                .join(Job, ApplicationTracker.job_id == Job.id)
+                .filter(ApplicationTracker.status == status)
+                .order_by(ApplicationTracker.updated_at.desc())
+                .all()
+            )
+            columns[status] = items
+
+        return render_template("apply_tracker.html", columns=columns, statuses=all_statuses)
+    except Exception as exc:
+        logger.error("tracker error: %s", exc)
+        return render_template("apply_tracker.html", columns={}, statuses=[], error=str(exc))
+    finally:
+        session.close()
+
+
+@app.route("/companies")
+def companies():
+    session = _new_session()
+    try:
+        from core.models import Job
+        from sqlalchemy import case
+
         rows = (
-            session.query(ApplicationTracker, Job)
-            .join(Job, ApplicationTracker.job_id == Job.id)
-            .order_by(ApplicationTracker.updated_at.desc())
+            session.query(
+                Job.company,
+                func.count(Job.id).label("total_jobs"),
+                func.avg(Job.legitimacy_score).label("avg_score"),
+                func.max(Job.legitimacy_score).label("max_score"),
+                (func.sum(case((Job.suspected_ghost == True, 1), else_=0)) * 100.0
+                 / func.count(Job.id)).label("ghost_pct"),
+            )
+            .filter(Job.is_active == True)
+            .group_by(Job.company)
+            .order_by(func.avg(Job.legitimacy_score).desc().nulls_last())
             .all()
         )
 
-    # Group by status
-    columns = {s: [] for s in TRACKER_STATUSES}
-    for entry, job in rows:
-        if entry.status in columns:
-            columns[entry.status].append({"entry": entry, "job": job})
+        companies_data = []
+        for row in rows:
+            companies_data.append({
+                "name":       row.company,
+                "total_jobs": row.total_jobs,
+                "avg_score":  round(row.avg_score, 1) if row.avg_score else None,
+                "max_score":  row.max_score,
+                "ghost_pct":  round(row.ghost_pct, 0) if row.ghost_pct else 0,
+            })
 
-    return render_template("apply_tracker.html", columns=columns, statuses=TRACKER_STATUSES)
-
-
-@app.route("/apply-tracker/add/<int:job_id>", methods=["POST"])
-def tracker_add(job_id):
-    """Add a job to the tracker (defaults to 'saved')."""
-    with get_session() as session:
-        existing = session.query(ApplicationTracker).filter_by(job_id=job_id).first()
-        if not existing:
-            entry = ApplicationTracker(job_id=job_id, status="saved")
-            session.add(entry)
-            session.commit()
-
-    # HTMX: if request wants partial, redirect to tracker; else go back to referrer
-    if request.headers.get("HX-Request"):
-        return redirect(url_for("apply_tracker")), 303
-    return redirect(request.referrer or url_for("apply_tracker"))
+        return render_template("companies.html", companies=companies_data)
+    except Exception as exc:
+        logger.error("companies error: %s", exc)
+        return render_template("companies.html", companies=[], error=str(exc))
+    finally:
+        session.close()
 
 
-@app.route("/apply-tracker/move/<int:entry_id>/<string:new_status>", methods=["POST"])
-def tracker_move(entry_id, new_status):
-    """Move a tracker entry to a new status."""
-    if new_status not in TRACKER_STATUSES:
-        return "Invalid status", 400
+# ─────────────────────────────────────────────
+#  Telegram webhook
+# ─────────────────────────────────────────────
 
-    with get_session() as session:
-        entry = session.get(ApplicationTracker, entry_id)
-        if entry:
-            entry.status = new_status
-            entry.updated_at = datetime.utcnow()
-            if new_status == "applied" and entry.applied_at is None:
-                entry.applied_at = datetime.utcnow()
-            session.commit()
-
-    if request.headers.get("HX-Request"):
-        return redirect(url_for("apply_tracker")), 303
-    return redirect(url_for("apply_tracker"))
-
-
-@app.route("/apply-tracker/remove/<int:entry_id>", methods=["POST"])
-def tracker_remove(entry_id):
-    """Remove a job from the tracker."""
-    with get_session() as session:
-        entry = session.get(ApplicationTracker, entry_id)
-        if entry:
-            session.delete(entry)
-            session.commit()
-
-    if request.headers.get("HX-Request"):
-        return redirect(url_for("apply_tracker")), 303
-    return redirect(url_for("apply_tracker"))
-
-
-@app.route("/apply-tracker/notes/<int:entry_id>", methods=["POST"])
-def tracker_notes(entry_id):
-    """Save notes for a tracker entry."""
-    notes = request.form.get("notes", "").strip()
-    with get_session() as session:
-        entry = session.get(ApplicationTracker, entry_id)
-        if entry:
-            entry.notes = notes or None
-            entry.updated_at = datetime.utcnow()
-            session.commit()
-    return "", 204   # No-content — HTMX hides the save indicator
-
-
-# ── /companies ────────────────────────────────────────────────────────────────
-@app.route("/companies")
-def companies():
-    sort_by = request.args.get("sort", "open_roles")
-    sort_map = {
-        "open_roles":    "cnt DESC",
-        "avg_score":     "avg_combined DESC NULLS LAST",
-        "avg_legit":     "avg_legit DESC NULLS LAST",
-        "ghost_rate":    "ghost_rate DESC NULLS LAST",
-        "company":       "company ASC",
-    }
-    order_clause = sort_map.get(sort_by, "cnt DESC")
-
-    with get_session() as session:
-        rows = session.execute(text(f"""
-            SELECT
-                company,
-                COUNT(*)                                      AS cnt,
-                AVG(legitimacy_score)::NUMERIC(5,1)           AS avg_legit,
-                AVG(combined_score)::NUMERIC(5,1)             AS avg_combined,
-                SUM(CASE WHEN suspected_ghost THEN 1 ELSE 0 END) AS ghost_cnt,
-                ROUND(
-                    100.0 * SUM(CASE WHEN suspected_ghost THEN 1 ELSE 0 END)
-                    / NULLIF(COUNT(*), 0)
-                )                                             AS ghost_rate,
-                MAX(first_seen)                               AS last_seen,
-                ARRAY_AGG(DISTINCT source)                    AS sources
-            FROM jobs
-            WHERE is_active = TRUE
-            GROUP BY company
-            ORDER BY {order_clause}
-            LIMIT 200
-        """)).fetchall()
-
-    return render_template("companies.html", rows=rows, sort_by=sort_by)
-
-
-# ══════════════════════════════════════════════════════════════════════════════
-# TELEGRAM WEBHOOK  — handles /status, /top10, /help from your bot
-# ══════════════════════════════════════════════════════════════════════════════
-
-_BOT_TOKEN = os.getenv("TELEGRAM_BOT_TOKEN", "")
-
-
-def _tg_send(chat_id, text):
-    """Send a Telegram message using plain HTTP — no extra deps."""
-    if not _BOT_TOKEN:
+def _tg_send(chat_id: str, text: str) -> None:
+    """Send Telegram message using urllib (no external deps)."""
+    token = os.getenv("TELEGRAM_BOT_TOKEN", "")
+    if not token:
         return
-    url  = f"https://api.telegram.org/bot{_BOT_TOKEN}/sendMessage"
-    body = json.dumps({
+    url = f"https://api.telegram.org/bot{token}/sendMessage"
+    payload = json.dumps({
         "chat_id": chat_id,
         "text": text,
         "parse_mode": "HTML",
         "disable_web_page_preview": True,
     }).encode()
-    req = urllib.request.Request(
-        url, data=body, headers={"Content-Type": "application/json"}
-    )
     try:
+        req = urllib.request.Request(
+            url,
+            data=payload,
+            headers={"Content-Type": "application/json"},
+        )
         urllib.request.urlopen(req, timeout=10)
     except Exception as exc:
-        app.logger.error(f"Telegram send error: {exc}")
+        logger.error("_tg_send failed: %s", exc)
 
 
-def _tg_status(chat_id):
-    today_start = datetime.utcnow().replace(hour=0, minute=0, second=0, microsecond=0)
-    with get_session() as session:
-        active      = session.query(func.count(Job.id)).filter(Job.is_active == True).scalar() or 0
-        avg_score   = session.query(func.avg(Job.combined_score)).filter(
-                          Job.is_active == True, Job.combined_score.isnot(None)).scalar()
-        added_today = session.query(func.count(Job.id)).filter(
-                          Job.is_active == True, Job.first_seen >= today_start).scalar() or 0
-        high_conf   = session.query(func.count(Job.id)).filter(
-                          Job.is_active == True, Job.combined_score >= 70).scalar() or 0
-        very_high   = session.query(func.count(Job.id)).filter(
-                          Job.is_active == True, Job.combined_score >= 85).scalar() or 0
-
-    avg_s = f"{avg_score:.1f}" if avg_score else "N/A"
-    now_s = datetime.now().strftime("%d %b %Y, %H:%M")
-    msg = (
-        f"<b>📈 Job Search Status</b>\n"
-        f"🕒 {now_s}\n\n"
-        f"📋 Active jobs:        <b>{active}</b>\n"
-        f"⭐ Avg score:          <b>{avg_s}/100</b>\n"
-        f"🆕 Added today:        <b>{added_today}</b>\n"
-        f"✅ Score ≥70:          <b>{high_conf}</b>\n"
-        f"🚀 Score ≥85:          <b>{very_high}</b>"
-    )
-    _tg_send(chat_id, msg)
+def _tg_send_chunked(chat_id: str, text: str, limit: int = 4096) -> None:
+    """Split and send long messages."""
+    if len(text) <= limit:
+        _tg_send(chat_id, text)
+        return
+    lines = text.split("\n")
+    current: list[str] = []
+    current_len = 0
+    for line in lines:
+        ll = len(line) + 1
+        if current_len + ll > limit:
+            _tg_send(chat_id, "\n".join(current))
+            current = [line]
+            current_len = ll
+        else:
+            current.append(line)
+            current_len += ll
+    if current:
+        _tg_send(chat_id, "\n".join(current))
 
 
-def _tg_top10(chat_id):
-    with get_session() as session:
+def _tg_status(chat_id: str) -> None:
+    session = _new_session()
+    try:
+        stats = _get_stats(session)
+        avg = f"{stats['avg_score']}/100" if stats["avg_score"] else "not scored"
+        msg = (
+            "<b>📊 Job Scanner Status</b>\n\n"
+            f"Active jobs:             {stats['total']}\n"
+            f"Avg score:               {avg}\n"
+            f"Today's new jobs:        {stats['new_today']}\n"
+            f"High confidence (≥70):   {stats['high']}\n"
+            f"Very high (≥85):         {stats['v_high']}\n"
+            f"Suspected ghosts:        {stats['ghosts']}\n\n"
+            f"IrishJobs:               {stats['irishjobs']}\n"
+            f"Indeed:                  {stats['indeed']}"
+        )
+        _tg_send(chat_id, msg)
+    except Exception as exc:
+        _tg_send(chat_id, f"Error: {exc}")
+    finally:
+        session.close()
+
+
+def _tg_top10(chat_id: str) -> None:
+    session = _new_session()
+    try:
+        from core.models import Job
         jobs = (
             session.query(Job)
-            .filter(Job.is_active == True, Job.combined_score.isnot(None))
-            .order_by(Job.combined_score.desc())
+            .filter(Job.is_active == True, Job.legitimacy_score != None)
+            .order_by(Job.legitimacy_score.desc())
             .limit(10)
             .all()
         )
+        if not jobs:
+            _tg_send(chat_id, "No scored jobs yet. Run the scraper first.")
+            return
 
-    if not jobs:
-        _tg_send(chat_id, "No scored jobs found yet.")
-        return
-
-    lines = ["<b>🏆 Top 10 Jobs</b>\n"]
-    for i, job in enumerate(jobs, 1):
-        score   = job.combined_score or 0
-        company = job.company or "Unknown"
-        title   = job.title   or "Unknown"
-        url     = job.url     or "#"
-        lines.append(
-            f"<b>#{i}</b> {score:.0f}/100\n"
-            f"🏢 {company}\n"
-            f"💼 {title}\n"
-            f'🔗 <a href="{url}">Apply Here</a>\n'
-        )
-
-    # Split into chunks to stay under Telegram's 4096-char limit
-    chunk = ""
-    for block in lines:
-        if len(chunk) + len(block) > 3800:
-            _tg_send(chat_id, chunk)
-            chunk = block
-        else:
-            chunk += block
-    if chunk:
-        _tg_send(chat_id, chunk)
+        lines = ["<b>🏆 Top 10 Jobs</b>\n"]
+        for i, job in enumerate(jobs, 1):
+            score = job.legitimacy_score or 0
+            badge = "🟢" if score >= 85 else ("🟡" if score >= 70 else "🔴")
+            loc = f"  📍 {job.location}" if job.location else ""
+            lines.append(
+                f"{i}. {badge} <b>[{score}]</b> {job.title}\n"
+                f"   🏢 {job.company}{loc}\n"
+                f"   🔗 <a href='{job.url}'>View</a>"
+            )
+        _tg_send_chunked(chat_id, "\n\n".join(lines))
+    except Exception as exc:
+        _tg_send(chat_id, f"Error: {exc}")
+    finally:
+        session.close()
 
 
-def _tg_help(chat_id):
-    msg = (
-        "<b>🤖 Job Search Bot — Commands</b>\n\n"
-        "/status  — DB snapshot (job counts, avg score)\n"
-        "/top10   — 10 highest-scoring active jobs\n"
-        "/help    — this message\n\n"
-        "<i>You also receive:</i>\n"
-        "• 🌅 Daily digest at 10:05 (jobs ≥70)\n"
-        "• 🚨 Instant alert every 30 min for jobs ≥85"
+def _tg_help(chat_id: str) -> None:
+    _tg_send(chat_id,
+        "<b>🤖 Job Discovery Bot</b>\n\n"
+        "/status — System stats\n"
+        "/top10  — Top 10 legit jobs\n"
+        "/ghosts — Ghost job list\n"
+        "/help   — This message"
     )
-    _tg_send(chat_id, msg)
 
 
 @app.route("/telegram/webhook", methods=["POST"])
 def telegram_webhook():
-    """Receive updates from Telegram and dispatch bot commands."""
-    update  = request.get_json(silent=True) or {}
-    message = update.get("message") or update.get("edited_message") or {}
-    chat_id = message.get("chat", {}).get("id")
-    text    = (message.get("text") or "").strip()
+    """Handle incoming Telegram webhook updates."""
+    try:
+        data = request.get_json(silent=True) or {}
+        # Extract message from update or edited_message
+        msg = data.get("message") or data.get("edited_message") or {}
+        chat = msg.get("chat", {})
+        chat_id = str(chat.get("id", ""))
+        text = (msg.get("text") or "").strip()
 
-    if not chat_id or not text:
-        return "ok", 200
+        if not chat_id or not text:
+            return "ok", 200
 
-    cmd = text.split("@")[0].lower()   # strip @botname suffix e.g. /status@jobbot
+        # Route commands
+        cmd = text.split()[0].lower().split("@")[0]
+        if cmd in ("/start", "/help"):
+            _tg_help(chat_id)
+        elif cmd == "/status":
+            _tg_status(chat_id)
+        elif cmd == "/top10":
+            _tg_top10(chat_id)
+        else:
+            _tg_help(chat_id)
 
-    if cmd == "/status":
-        _tg_status(chat_id)
-    elif cmd == "/top10":
-        _tg_top10(chat_id)
-    elif cmd in ("/help", "/start"):
-        _tg_help(chat_id)
+    except Exception as exc:
+        logger.error("webhook error: %s", exc)
 
+    # Always return 200 — never let Telegram retry
     return "ok", 200
 
 
-# ── 404 ───────────────────────────────────────────────────────────────────────
-@app.errorhandler(404)
-def not_found(e):
-    return render_template("404.html"), 404
+# ─────────────────────────────────────────────
+#  Webhook registration (run once at deployment)
+# ─────────────────────────────────────────────
+
+def register_webhook(render_url: str) -> bool:
+    """
+    Point Telegram at this server's webhook endpoint.
+    Call once after deploying to Render:
+      from dashboard import register_webhook
+      register_webhook("https://your-app.onrender.com")
+    """
+    token = os.getenv("TELEGRAM_BOT_TOKEN", "")
+    if not token:
+        logger.error("TELEGRAM_BOT_TOKEN not set")
+        return False
+
+    webhook_url = f"{render_url.rstrip('/')}/telegram/webhook"
+    api_url = f"https://api.telegram.org/bot{token}/setWebhook"
+    payload = json.dumps({"url": webhook_url}).encode()
+    try:
+        req = urllib.request.Request(
+            api_url,
+            data=payload,
+            headers={"Content-Type": "application/json"},
+        )
+        with urllib.request.urlopen(req, timeout=10) as resp:
+            result = json.loads(resp.read())
+            if result.get("ok"):
+                logger.info("Webhook registered: %s", webhook_url)
+                return True
+            else:
+                logger.error("Webhook registration failed: %s", result)
+                return False
+    except Exception as exc:
+        logger.error("register_webhook error: %s", exc)
+        return False
 
 
-# ── Entrypoint ─────────────────────────────────────────────────────────────────
+# ─────────────────────────────────────────────
+#  Template filters
+# ─────────────────────────────────────────────
+
+@app.template_filter("score_color")
+def score_color(score) -> str:
+    if score is None:
+        return "secondary"
+    if score >= 85:
+        return "success"
+    if score >= 70:
+        return "warning"
+    if score >= 50:
+        return "info"
+    return "danger"
+
+
+@app.template_filter("score_label")
+def score_label(score) -> str:
+    if score is None:
+        return "Unscored"
+    if score >= 85:
+        return "Very High"
+    if score >= 70:
+        return "High"
+    if score >= 50:
+        return "Medium"
+    return "Low"
+
+
+@app.template_filter("timeago")
+def timeago(dt) -> str:
+    if not dt:
+        return "unknown"
+    if dt.tzinfo is None:
+        dt = dt.replace(tzinfo=timezone.utc)
+    delta = datetime.now(timezone.utc) - dt
+    if delta.days == 0:
+        hours = delta.seconds // 3600
+        if hours == 0:
+            return "just now"
+        return f"{hours}h ago"
+    if delta.days == 1:
+        return "1 day ago"
+    if delta.days < 30:
+        return f"{delta.days} days ago"
+    if delta.days < 365:
+        return f"{delta.days // 30}mo ago"
+    return f"{delta.days // 365}y ago"
+
+
 if __name__ == "__main__":
-    if sys.platform == "win32":
-        sys.stdout.reconfigure(encoding="utf-8", errors="replace")
-        sys.stderr.reconfigure(encoding="utf-8", errors="replace")
-
-    port = int(os.environ.get("PORT", 5000))
-    host = "0.0.0.0" if os.environ.get("RENDER") else "127.0.0.1"
-
-    print("=" * 60)
-    print(f"  Job Discovery Dashboard  →  http://{host}:{port}")
-    print("=" * 60)
-    app.run(debug=os.environ.get("FLASK_ENV") != "production",
-            host=host, port=port, use_reloader=False)
+    port = int(os.getenv("PORT", 5000))
+    debug = os.getenv("FLASK_DEBUG", "").lower() in ("1", "true", "yes")
+    logger.info("Starting dashboard on port %d (debug=%s)", port, debug)
+    app.run(host="0.0.0.0", port=port, debug=debug)

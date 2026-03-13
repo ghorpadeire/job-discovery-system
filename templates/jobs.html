@@ -1,143 +1,129 @@
 {% extends "base.html" %}
-{% block title %}Browse Jobs{% endblock %}
+{% block title %}Jobs — Job Discovery System{% endblock %}
 
 {% block content %}
-<div class="d-flex align-items-center justify-content-between mb-3">
-  <div>
-    <h1 class="h3 fw-bold mb-0">Browse Jobs</h1>
-    <p class="text-muted mb-0 small">{{ total }} active jobs in database</p>
-  </div>
+
+<!-- ─── Filter bar ──────────────────────────────────────── -->
+<div class="filter-bar mb-3">
+    <div class="row g-2 align-items-end">
+        <div class="col-md-4">
+            <label class="form-label text-muted mb-1" style="font-size:0.72rem">Search jobs</label>
+            <div class="input-group input-group-sm">
+                <span class="input-group-text bg-dark border-secondary">
+                    <i class="bi bi-search text-muted"></i>
+                </span>
+                <input type="text" id="search-input" class="form-control"
+                       placeholder="Java developer, cybersecurity..."
+                       hx-get="/jobs/partial"
+                       hx-trigger="keyup changed delay:400ms"
+                       hx-target="#jobs-table-body"
+                       hx-include="#filter-form"
+                       name="q">
+            </div>
+        </div>
+        <div class="col-md-2">
+            <label class="form-label text-muted mb-1" style="font-size:0.72rem">Min Score</label>
+            <input type="number" class="form-control form-control-sm"
+                   id="min-score-input" name="min_score" value="0" min="0" max="100"
+                   hx-get="/jobs/partial"
+                   hx-trigger="change"
+                   hx-target="#jobs-table-body"
+                   hx-include="#filter-form">
+        </div>
+        <div class="col-md-2">
+            <label class="form-label text-muted mb-1" style="font-size:0.72rem">Source</label>
+            <select class="form-select form-select-sm" name="source" id="source-select"
+                    hx-get="/jobs/partial"
+                    hx-trigger="change"
+                    hx-target="#jobs-table-body"
+                    hx-include="#filter-form">
+                <option value="">All sources</option>
+                <option value="irishjobs">IrishJobs.ie</option>
+                <option value="indeed">Indeed</option>
+            </select>
+        </div>
+        <div class="col-md-2">
+            <label class="form-label text-muted mb-1" style="font-size:0.72rem">Ghost filter</label>
+            <select class="form-select form-select-sm" name="ghost" id="ghost-select"
+                    hx-get="/jobs/partial"
+                    hx-trigger="change"
+                    hx-target="#jobs-table-body"
+                    hx-include="#filter-form">
+                <option value="">All jobs</option>
+                <option value="false">Real jobs only</option>
+                <option value="true">Ghosts only</option>
+            </select>
+        </div>
+        <div class="col-md-2">
+            <label class="form-label text-muted mb-1" style="font-size:0.72rem">Sort by</label>
+            <select class="form-select form-select-sm" name="sort" id="sort-select"
+                    hx-get="/jobs/partial"
+                    hx-trigger="change"
+                    hx-target="#jobs-table-body"
+                    hx-include="#filter-form">
+                <option value="score">Score (high→low)</option>
+                <option value="date">Date (newest)</option>
+                <option value="company">Company (A–Z)</option>
+            </select>
+        </div>
+    </div>
 </div>
 
-<!-- ── Filter Panel ── -->
-<form id="filter-form"
-      hx-get="{{ url_for('jobs_rows') }}"
-      hx-target="#jobs-tbody"
-      hx-trigger="change, keyup delay:400ms from:input[name=company]"
-      hx-indicator="#loading-indicator"
-      class="filter-panel">
-  <div class="row g-2 align-items-end">
-
-    <div class="col-6 col-md-2">
-      <label class="form-label small mb-1 text-muted">Min Score</label>
-      <input type="number" class="form-control form-control-sm bg-dark border-secondary text-white"
-             name="min_score" min="0" max="100" step="1" placeholder="0"
-             value="{{ args.get('min_score','') }}">
-    </div>
-
-    <div class="col-6 col-md-2">
-      <label class="form-label small mb-1 text-muted">Max Score</label>
-      <input type="number" class="form-control form-control-sm bg-dark border-secondary text-white"
-             name="max_score" min="0" max="100" step="1" placeholder="100"
-             value="{{ args.get('max_score','') }}">
-    </div>
-
-    <div class="col-md-3">
-      <label class="form-label small mb-1 text-muted">Company</label>
-      <input type="text" class="form-control form-control-sm bg-dark border-secondary text-white"
-             name="company" placeholder="Filter by company…"
-             value="{{ args.get('company','') }}">
-    </div>
-
-    <div class="col-6 col-md-2">
-      <label class="form-label small mb-1 text-muted">Source</label>
-      <select class="form-select form-select-sm bg-dark border-secondary text-white" name="source">
-        <option value="">All sources</option>
-        {% for src in sources %}
-        <option value="{{ src }}" {% if args.get('source') == src %}selected{% endif %}>
-          {{ src }}
-        </option>
-        {% endfor %}
-      </select>
-    </div>
-
-    <div class="col-6 col-md-1">
-      <label class="form-label small mb-1 text-muted">Days</label>
-      <select class="form-select form-select-sm bg-dark border-secondary text-white" name="days_back">
-        <option value="">All time</option>
-        <option value="1"  {% if args.get('days_back')=='1'  %}selected{% endif %}>24h</option>
-        <option value="7"  {% if args.get('days_back')=='7'  %}selected{% endif %}>7d</option>
-        <option value="14" {% if args.get('days_back')=='14' %}selected{% endif %}>14d</option>
-        <option value="30" {% if args.get('days_back')=='30' %}selected{% endif %}>30d</option>
-      </select>
-    </div>
-
-    <div class="col-md-2">
-      <label class="form-label small mb-1 text-muted">Sort By</label>
-      <select class="form-select form-select-sm bg-dark border-secondary text-white" name="sort_by">
-        <option value="combined_score"   {% if args.get('sort_by','combined_score') == 'combined_score'   %}selected{% endif %}>Combined Score</option>
-        <option value="legitimacy_score" {% if args.get('sort_by') == 'legitimacy_score' %}selected{% endif %}>Legitimacy</option>
-        <option value="relevance_score"  {% if args.get('sort_by') == 'relevance_score'  %}selected{% endif %}>Relevance</option>
-        <option value="first_seen"       {% if args.get('sort_by') == 'first_seen'       %}selected{% endif %}>Newest First</option>
-        <option value="company"          {% if args.get('sort_by') == 'company'           %}selected{% endif %}>Company A-Z</option>
-      </select>
-    </div>
-
-  </div>
-
-  <div class="d-flex gap-3 mt-2 align-items-center">
-    <div class="form-check form-check-inline mb-0">
-      <input class="form-check-input" type="checkbox" id="show_ghost" name="show_ghost" value="1"
-             {% if args.get('show_ghost')=='1' %}checked{% endif %}>
-      <label class="form-check-label small text-muted" for="show_ghost">
-        <i class="bi bi-exclamation-triangle text-warning me-1"></i>Ghosts only
-      </label>
-    </div>
-    <div class="form-check form-check-inline mb-0">
-      <input class="form-check-input" type="checkbox" id="scored_only" name="scored_only" value="1"
-             {% if args.get('scored_only')=='1' %}checked{% endif %}>
-      <label class="form-check-label small text-muted" for="scored_only">
-        <i class="bi bi-cpu me-1"></i>AI scored only
-      </label>
-    </div>
-    <span id="loading-indicator" class="htmx-indicator text-muted small">
-      <span class="spinner-border spinner-border-sm me-1"></span>Loading…
-    </span>
-  </div>
+<!-- Hidden form for HTMX include -->
+<form id="filter-form" style="display:none">
+    <input type="hidden" name="q"         id="q-hidden">
+    <input type="hidden" name="min_score" id="min-score-hidden">
+    <input type="hidden" name="source"    id="source-hidden">
+    <input type="hidden" name="ghost"     id="ghost-hidden">
+    <input type="hidden" name="sort"      id="sort-hidden">
 </form>
 
-<!-- ── Jobs Table ── -->
-<div class="card">
-  <div class="table-responsive">
-    <table class="table table-hover align-middle mb-0">
-      <thead class="border-bottom border-secondary">
-        <tr>
-          <th style="min-width:220px">Title</th>
-          <th style="min-width:140px">Company</th>
-          <th style="min-width:90px">Combined</th>
-          <th style="min-width:80px">Legit</th>
-          <th style="min-width:75px">Relevance</th>
-          <th>Source</th>
-          <th>Posted</th>
-          <th>Status</th>
-          <th></th>
-        </tr>
-      </thead>
-      <tbody id="jobs-tbody"
-             hx-get="{{ url_for('jobs_rows') }}"
-             hx-trigger="load"
-             hx-indicator="#loading-indicator">
-        <!-- populated by HTMX on page load -->
-        <tr>
-          <td colspan="9" class="text-center text-muted py-4">
-            <span class="spinner-border spinner-border-sm me-2"></span>Loading jobs…
-          </td>
-        </tr>
-      </tbody>
-    </table>
-  </div>
+<!-- ─── Jobs table ─────────────────────────────────────── -->
+<div class="card-dark p-0">
+    <div class="table-responsive">
+        <table class="table table-borderless jobs-table mb-0">
+            <thead>
+                <tr class="border-bottom border-secondary border-opacity-10">
+                    <th style="width:70px">Score</th>
+                    <th>Job Title</th>
+                    <th>Company</th>
+                    <th>Location</th>
+                    <th>Salary</th>
+                    <th>Date</th>
+                    <th>Source</th>
+                    <th></th>
+                </tr>
+            </thead>
+            <tbody id="jobs-table-body"
+                   hx-get="/jobs/partial"
+                   hx-trigger="load"
+                   hx-target="#jobs-table-body"
+                   hx-swap="innerHTML">
+                <tr>
+                    <td colspan="8" class="text-center py-4 text-muted">
+                        <div class="spinner-border spinner-border-sm me-2" role="status"></div>
+                        Loading jobs...
+                    </td>
+                </tr>
+            </tbody>
+        </table>
+    </div>
 </div>
 
 {% endblock %}
 
 {% block scripts %}
 <script>
-  // When any filter input changes, re-sync the HTMX URL with the form values
-  // (so the partial and the full form share the same filter state)
-  document.getElementById('filter-form').addEventListener('change', () => {
-    document.querySelectorAll('#jobs-tbody').forEach(el => {
-      // HTMX handles the request automatically via hx-trigger on the form
-    });
-  });
+// Keep the hidden form in sync with the visible filter inputs
+function syncFilters() {
+    document.getElementById('q-hidden').value         = document.getElementById('search-input').value;
+    document.getElementById('min-score-hidden').value  = document.getElementById('min-score-input').value;
+    document.getElementById('source-hidden').value    = document.getElementById('source-select').value;
+    document.getElementById('ghost-hidden').value     = document.getElementById('ghost-select').value;
+    document.getElementById('sort-hidden').value      = document.getElementById('sort-select').value;
+}
+document.querySelectorAll('#search-input, #min-score-input, #source-select, #ghost-select, #sort-select')
+    .forEach(el => el.addEventListener('change', syncFilters));
+document.getElementById('search-input').addEventListener('keyup', syncFilters);
 </script>
 {% endblock %}

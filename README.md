@@ -1,381 +1,229 @@
-# 🔍 Job Discovery & Ghost Job Filter System
+# JobScout v2.0 — Irish Job Discovery & Ghost Job Filter System
 
-> Automated job scraping, legitimacy scoring, and application tracking — purpose-built to cut through ghost jobs and stale listings in the Irish tech market.
+Automated job hunting assistant that scrapes Irish job boards, scores every
+listing on a 0–100 legitimacy scale, filters out ghost/fake jobs, and delivers
+real opportunities to Telegram and a web dashboard.
 
-[![Python](https://img.shields.io/badge/Python-3.13-3776AB?style=flat&logo=python&logoColor=white)](https://python.org)
-[![Flask](https://img.shields.io/badge/Flask-3.x-000000?style=flat&logo=flask&logoColor=white)](https://flask.palletsprojects.com)
-[![PostgreSQL](https://img.shields.io/badge/PostgreSQL-16-336791?style=flat&logo=postgresql&logoColor=white)](https://postgresql.org)
-[![Redis](https://img.shields.io/badge/Redis-7-DC382D?style=flat&logo=redis&logoColor=white)](https://redis.io)
-[![Docker](https://img.shields.io/badge/Docker-Compose-2496ED?style=flat&logo=docker&logoColor=white)](https://docker.com)
-[![Playwright](https://img.shields.io/badge/Playwright-Chromium-45ba4b?style=flat&logo=playwright&logoColor=white)](https://playwright.dev)
-[![OpenAI](https://img.shields.io/badge/OpenAI-GPT--4o--mini-412991?style=flat&logo=openai&logoColor=white)](https://openai.com)
-[![CI/CD](https://img.shields.io/badge/GitHub_Actions-CI%2FCD-2088FF?style=flat&logo=github-actions&logoColor=white)](https://github.com/features/actions)
-[![License](https://img.shields.io/badge/License-MIT-green?style=flat)](LICENSE)
+Built for **Pranav Ghorpade** — MSc Cybersecurity, NCI Dublin  
+Target: Entry-level Java Developer | Junior Cybersecurity Analyst | IT Support
 
 ---
 
-## 🧩 Problem Statement
-
-Job hunting in Ireland is frustrating for a specific reason: **ghost jobs**.
-
-Recruiters routinely post roles that are already filled, indefinitely "evergreen", or never genuinely open. Entry-level candidates waste hours tailoring CVs for listings that will never result in a call. Aggregators like Indeed and IrishJobs surface these alongside real vacancies with no way to tell them apart.
-
-This project solves that by:
-
-1. **Scraping** fresh job listings automatically from multiple Irish sources
-2. **Scoring** every listing across 7 legitimacy signals (0–100)
-3. **Flagging** likely ghost jobs before you ever click "Apply"
-4. **Tracking** real applications through a Kanban pipeline
-5. **Alerting** via Telegram when genuinely strong matches arrive
-
----
-
-## 🏗️ Architecture
-
-```
-┌─────────────────────────────────────────────────────────────────┐
-│                      Docker Compose Stack                       │
-│                                                                 │
-│  ┌─────────────┐   scrape_done   ┌──────────────┐              │
-│  │   scraper   │ ──────────────► │    scorer    │              │
-│  │  (Python /  │   Redis pub/sub │  (Python /   │              │
-│  │ APScheduler)│                 │  SQLAlchemy) │              │
-│  └──────┬──────┘                 └──────┬───────┘              │
-│         │                               │                       │
-│         │  writes jobs                  │  writes scores        │
-│         ▼                               ▼                       │
-│  ┌──────────────────────────────────────────────┐               │
-│  │              PostgreSQL 15                   │               │
-│  │   jobs table · application_tracker table     │               │
-│  └────────────────────┬─────────────────────────┘               │
-│                       │                                         │
-│                       │  reads                                  │
-│                       ▼                                         │
-│  ┌─────────────────────────────┐   ┌──────────────────────┐    │
-│  │        web (Flask)          │   │   telegram_bot.py    │    │
-│  │  Dashboard · Filter · Track │   │  Instant alerts      │    │
-│  │  port 5000                  │   │  Daily digest        │    │
-│  └─────────────────────────────┘   └──────────────────────┘    │
-│                                                                 │
-│  ┌──────────────┐                                               │
-│  │    Redis 7   │  ← cache · pub/sub bus · rate-limit store     │
-│  └──────────────┘                                               │
-└─────────────────────────────────────────────────────────────────┘
-
-  Scraping layer:  Playwright (Chromium, headless) + httpx
-  Sources:         IrishJobs.ie  ·  Indeed Ireland
-```
-
----
-
-## ✨ Features
-
-| Feature | Description |
-|---|---|
-| **Multi-source scraping** | IrishJobs.ie (Playwright) + Indeed Ireland (JSON + HTML fallback) |
-| **Ghost job scoring** | 7-signal legitimacy score per listing (0–100) |
-| **AI relevance scoring** | GPT-4o-mini rates job fit against a custom profile |
-| **Deduplication** | Normalised cross-source dedup — same job, one row |
-| **Career page verification** | Checks company's own site for the role (Signal 1) |
-| **Flask dashboard** | Dark-mode UI with live HTMX filtering |
-| **Application Kanban** | Saved → Applied → Interview → Offer → Rejected |
-| **Company credibility** | Per-company ghost rate, avg score, role volume |
-| **Telegram alerts** | Instant push for score ≥ 85, daily digest at 09:00 |
-| **Docker Compose** | One-command full-stack deployment |
-| **CI/CD pipeline** | GitHub Actions: lint → test → Docker build → GHCR push |
-
----
-
-## 📊 Scoring Algorithm
-
-Each job is scored 0–100 across seven weighted signals:
-
-| # | Signal | Points | Logic |
-|---|---|---|---|
-| 1 | **Career page match** | 25 | Title found on company's own careers site |
-| 2 | **Recently posted** | 20 | Posted within the last 14 days |
-| 3 | **Company volume** | 15 | Company has ≥ 3 active roles in the database |
-| 4 | **Not a repost** | 15 | `first_seen` within the last 30 days |
-| 5 | **URL resolves** | 10 | HTTP HEAD to job URL returns 2xx |
-| 6 | **Has salary** | 10 | Salary field is populated |
-| 7 | **Rich description** | 5 | > 200 words in the full job description |
-
-**Ghost job threshold:** combined score < 30
-
-**AI scoring (optional, Phase 4):**
-- Embeddings via `text-embedding-3-small` for semantic similarity
-- Reasoning via `gpt-4o-mini` for relevance explanation
-- Cost: ~$0.01–$0.05 per full rescore of 200 jobs
-
----
-
-## 🖼️ Screenshots
-
-> _Dashboard screenshots — coming soon_
-
-| Page | Description |
-|---|---|
-| **Home** | KPI cards (active jobs, avg score, added today, ghost count, high-confidence, in tracker) |
-| **Jobs** | Filterable table with live HTMX search, score pills, source badges |
-| **Job Detail** | Signal breakdown bars, AI reasoning, inline tracker panel |
-| **Apply Tracker** | Kanban board across 5 pipeline stages |
-| **Companies** | Credibility table with ghost rates and progress bars |
-
----
-
-## 🚀 Quick Start — Docker (Recommended)
+## Quick Start (Local, Windows)
 
 ### Prerequisites
-- Docker Desktop (Mac/Linux) or Docker Engine + Compose plugin
-- A free [OpenAI API key](https://platform.openai.com/api-keys) (optional — only needed for AI scoring)
-- A Telegram bot token from [@BotFather](https://t.me/BotFather) (optional — only needed for alerts)
+- Python 3.13 (`py` command)
+- PostgreSQL 16 running on port 5432
+- Redis running on port 6379
+- Working directory: `F:\CLAUDE_CODE\JOB SEARCH\`
 
-### 1. Clone & configure
-
-```bash
-git clone https://github.com/ghorpadeire/job-discovery-system.git
-cd job-discovery-system
-
-cp .env.example .env
-# Edit .env — at minimum fill in OPENAI_API_KEY and TELEGRAM_* if desired
+### 1. Install dependencies
+```bat
+py -m pip install -r requirements.txt
+py -m playwright install chromium
 ```
 
-### 2. Start the full stack
-
-```bash
-docker compose up -d
+### 2. Create your database
+```bat
+"C:\Program Files\PostgreSQL\16\bin\psql.exe" -U postgres -c "CREATE USER jobsuser WITH PASSWORD 'jobspass';"
+"C:\Program Files\PostgreSQL\16\bin\psql.exe" -U postgres -c "CREATE DATABASE jobsdb OWNER jobsuser;"
 ```
 
-This starts PostgreSQL, Redis, the scraper service, the scorer service, and the Flask dashboard.
+### 3. Configure .env
+Edit `.env` and fill in your Telegram bot token and chat ID.
+Get them from @BotFather and @userinfobot on Telegram.
 
-### 3. Open the dashboard
-
-```
-http://localhost:5000
-```
-
-The scraper runs immediately on startup and again every 12 hours. The scorer triggers automatically after each scrape via Redis pub/sub.
-
-### Useful commands
-
-```bash
-# View live logs from all services
-docker compose logs -f
-
-# View logs from a specific service
-docker compose logs -f scraper
-
-# Force an immediate scrape
-docker compose exec scraper python run_all.py
-
-# Force an immediate rescore
-docker compose exec scorer python score_jobs.py --rescore
-
-# Stop everything (preserves volumes)
-docker compose down
-
-# Stop and wipe all data
-docker compose down -v
+### 4. Run the full pipeline
+```bat
+py run_all.py --score
 ```
 
----
-
-## 🛠️ Manual Install (No Docker)
-
-### Prerequisites
-- Python 3.13+
-- PostgreSQL 16 running locally on port 5432
-- Redis 7 running locally on port 6379
-
-### 1. Clone & install
-
-```bash
-git clone https://github.com/ghorpadeire/job-discovery-system.git
-cd job-discovery-system
-
-python -m venv .venv
-source .venv/bin/activate        # Windows: .venv\Scripts\activate
-
-pip install -r requirements.txt
-playwright install chromium --with-deps
-```
-
-### 2. Configure
-
-```bash
-cp .env.example .env
-# Edit .env:
-#   DATABASE_URL=postgresql://jobsuser:jobspass@localhost:5432/jobsdb
-#   REDIS_URL=redis://localhost:6379/0
-#   OPENAI_API_KEY=sk-...    (optional)
-#   TELEGRAM_BOT_TOKEN=...   (optional)
-#   TELEGRAM_CHAT_ID=...     (optional)
-```
-
-### 3. Initialise the database
-
-```bash
-# Create the DB and user (as postgres superuser)
-psql -U postgres -c "CREATE USER jobsuser WITH PASSWORD 'jobspass';"
-psql -U postgres -c "CREATE DATABASE jobsdb OWNER jobsuser;"
-
-# Tables are created automatically by SQLAlchemy on first run
-```
-
-### 4. Run
-
-```bash
-# Scrape + score (one shot)
-py run_all.py
-py score_jobs.py --rescore
-
-# Launch dashboard
+### 5. Start the dashboard
+```bat
 py dashboard.py
-# → http://localhost:5000
+```
+Open http://localhost:5000
 
-# Show only ghost jobs (score < 30)
-py score_jobs.py --show-ghosts
-
-# Show high-confidence jobs (score ≥ 70)
-py score_jobs.py --min-score 70
+### 6. Start the Telegram bot (local polling)
+```bat
+py telegram_bot.py
 ```
 
 ---
 
-## 📁 Project Structure
+## Commands
+
+| Command | Description |
+|---------|-------------|
+| `py run_all.py --score` | Scrape all boards + score jobs |
+| `py run_all.py --no-indeed` | Only scrape IrishJobs |
+| `py run_all.py --no-irishjobs` | Only scrape Indeed |
+| `py score_jobs.py` | Score unscored jobs |
+| `py score_jobs.py --rescore` | Re-score all jobs |
+| `py score_jobs.py --min-score 70` | Show only quality jobs |
+| `py score_jobs.py --show-ghosts` | Audit ghost jobs |
+| `py tg_notify.py --digest` | Send daily Telegram digest |
+| `py tg_notify.py --alerts` | Send instant alerts for ≥85 jobs |
+| `py telegram_bot.py` | Start persistent Telegram bot |
+| `py dashboard.py` | Start web dashboard on port 5000 |
+
+---
+
+## 7-Signal Scoring System
+
+| Signal | Points | Description |
+|--------|--------|-------------|
+| `career_page_match` | 25 | Job title found on company's real careers page |
+| `recently_posted` | 20 | Posted within last 14 days |
+| `company_volume` | 15 | Company has ≥3 active jobs (benefit of doubt if 0) |
+| `not_a_repost` | 15 | First seen ≤30 days ago |
+| `url_resolves` | 10 | Job URL responds (not dead link) |
+| `has_salary` | 10 | Salary information provided |
+| `rich_description` | 5 | Job page has ≥200 words |
+
+**Score tiers:**
+- `≥85` — Very high confidence → Instant Telegram alert
+- `70–84` — High confidence → Daily digest
+- `50–69` — Medium confidence
+- `30–49` — Low confidence
+- `<30` — Suspected ghost job
+
+### Career Checker — 5-Layer Architecture
+Signal 1 is the most powerful. It uses:
+1. **Hardcoded known URLs** for 40+ major companies (Google, Microsoft, Accenture, AIB, etc.)
+2. **DuckDuckGo search** for companies not in the known list
+3. **ATS platform detection** — Workday JSON API, Greenhouse, Lever, SmartRecruiters
+4. **Blind URL probing** — tries `www.{company}.com/careers`, `jobs.{company}.ie`, etc.
+5. **Graceful failure** — always returns False on errors, never crashes
+
+---
+
+## Deployment — Render + GitHub Actions
+
+### Step 1: Cloud database (Neon.tech — free)
+1. Sign up at [neon.tech](https://neon.tech)
+2. Create a database called `jobsdb`
+3. Copy the connection string (format: `postgresql://user:pass@ep-xxx.neon.tech/jobsdb?sslmode=require`)
+
+### Step 2: Cloud Redis (Upstash — free)
+1. Sign up at [upstash.com](https://upstash.com)
+2. Create a Redis database
+3. Copy the connection string
+
+### Step 3: GitHub setup
+1. Push all code to a GitHub repo
+2. Go to Settings → Secrets and Variables → Actions
+3. Add these secrets:
+   - `DATABASE_URL` — your Neon connection string
+   - `REDIS_URL` — your Upstash connection string
+   - `TELEGRAM_BOT_TOKEN`
+   - `TELEGRAM_CHAT_ID`
+   - `OPENAI_API_KEY`
+
+### Step 4: Render deployment
+1. Go to [render.com](https://render.com) → New → Blueprint
+2. Connect your GitHub repo
+3. Render reads `render.yaml` and auto-deploys
+4. Set env vars in Render dashboard (same as GitHub secrets)
+
+### Step 5: Register Telegram webhook
+Once deployed, run once:
+```python
+from dashboard import register_webhook
+register_webhook("https://your-app.onrender.com")
+```
+
+### Step 6: Verify
+1. Send `/status` to your Telegram bot
+2. Trigger GitHub Actions manually (mode: `digest`)
+3. Open `https://your-app.onrender.com` in browser
+
+---
+
+## Architecture
 
 ```
-job-discovery-system/
-│
+run_all.py ──► IrishJobsScraper ──► PostgreSQL
+               IndeedScraper    ──►     │
+                                        │
+score_jobs.py ◄───────────────── scorer.py
+                                  │
+                              career_checker.py
+                              (5-layer ATS detection)
+                                        │
+tg_notify.py ◄──────────── DB queries ─┘
+telegram_bot.py ◄──────────────────────┘
+dashboard.py (Flask + HTMX) ◄──────────┘
+
+GitHub Actions (cron) → tg_notify.py (--digest / --alerts)
+Render (web) ← Telegram webhook → dashboard.py /telegram/webhook
+```
+
+---
+
+## Telegram Bot Commands
+
+| Command | Description |
+|---------|-------------|
+| `/start` | Welcome message |
+| `/help` | Command list |
+| `/status` | System statistics |
+| `/top10` | Top 10 jobs by score |
+| `/ghosts` | List suspected ghost jobs |
+| `/search <keyword>` | Search jobs |
+
+---
+
+## File Structure
+
+```
+JOB SEARCH/
+├── .env                          # Credentials (never commit!)
+├── .github/workflows/telegram.yml # GitHub Actions — daily digest + alerts
 ├── core/
-│   ├── models.py            # SQLAlchemy: Job, ApplicationTracker
-│   ├── database.py          # Engine factory, check_connection()
-│   ├── cache.py             # RedisCache + NullCache fallback
-│   ├── deduplicator.py      # Cross-source deduplication
-│   ├── career_checker.py    # Company careers-page signal
-│   └── scorer.py            # 7-signal scorer + AI scoring
-│
+│   ├── models.py                 # SQLAlchemy models (Job, ApplicationTracker)
+│   ├── database.py               # Engine factory + migrations
+│   ├── cache.py                  # Redis + NullCache fallback
+│   ├── deduplicator.py           # Cross-source dedup
+│   ├── career_checker.py         # 5-layer ATS career page checker
+│   └── scorer.py                 # 7-signal legitimacy scorer
 ├── scrapers/
-│   ├── base.py              # Abstract BaseScraper, ScraperResult
-│   ├── irishjobs.py         # IrishJobs.ie — Playwright scraper
-│   └── indeed.py            # Indeed Ireland — JSON + HTML fallback
-│
-├── services/                # Docker service entry points
-│   ├── scraper_loop.py      # APScheduler loop (every 12h)
-│   └── scorer_loop.py       # Redis sub + fallback timer
-│
-├── templates/               # Jinja2 / Bootstrap 5 dark theme
-│   ├── base.html            # Sidebar layout, HTMX, Bootstrap Icons
-│   ├── index.html           # Home — KPI cards + top jobs
-│   ├── jobs.html            # Job list with HTMX live filters
-│   ├── job_detail.html      # Signal bars, AI reasoning, tracker
-│   ├── apply_tracker.html   # Kanban board
-│   ├── companies.html       # Company credibility table
-│   ├── 404.html
-│   └── partials/
-│       └── jobs_rows.html   # HTMX partial — table rows only
-│
-├── .github/
-│   └── workflows/
-│       └── ci.yml           # Lint → Test → Docker build → GHCR push
-│
-├── dashboard.py             # Flask app + all routes
-├── run_all.py               # Unified scraper CLI
-├── score_jobs.py            # Scoring CLI
-├── telegram_bot.py          # Telegram alerts + daily digest
-├── Dockerfile               # Shared Python 3.13-slim image
-├── docker-compose.yml       # Full stack: postgres, redis, scraper, scorer, web
-├── init.sql                 # DB schema bootstrapped on first Docker run
-├── requirements.txt
-├── .env.example
-├── .gitignore
-└── README.md
+│   ├── base.py                   # Abstract base + upsert logic
+│   ├── irishjobs.py              # Playwright scraper for IrishJobs.ie
+│   └── indeed.py                 # JSON+HTML scraper for Indeed IE
+├── templates/                    # Flask/Jinja2 templates
+│   ├── base.html                 # Dark sidebar layout
+│   ├── index.html                # Dashboard home (6 stat cards)
+│   ├── jobs.html                 # Filterable jobs table (HTMX)
+│   ├── job_detail.html           # Job detail + score breakdown
+│   ├── apply_tracker.html        # Kanban application tracker
+│   ├── companies.html            # Company credibility table
+│   └── partials/jobs_rows.html   # HTMX live filter partial
+├── run_all.py                    # Unified CLI runner
+├── score_jobs.py                 # Scoring CLI + report
+├── tg_notify.py                  # One-shot GitHub Actions notifier
+├── telegram_bot.py               # Persistent polling bot (local)
+├── dashboard.py                  # Flask app + Telegram webhook
+├── requirements.txt              # Full deps
+├── requirements-notify.txt       # Lightweight deps (CI only)
+├── Procfile                      # Render/Heroku process file
+└── render.yaml                   # Render blueprint
 ```
 
 ---
 
-## 🗺️ Roadmap
+## Improvements over v1
 
-- [x] **Phase 1** — PostgreSQL schema + SQLAlchemy models
-- [x] **Phase 2** — IrishJobs.ie Playwright scraper
-- [x] **Phase 3** — Indeed Ireland scraper (JSON blob + HTML fallback)
-- [x] **Phase 4** — 7-signal legitimacy scorer + OpenAI AI relevance scoring
-- [x] **Phase 5** — Telegram bot (instant alerts + daily digest)
-- [x] **Phase 6** — Flask dashboard (HTMX, Kanban tracker, company credibility)
-- [x] **Phase 7** — Docker Compose full stack + GitHub Actions CI/CD
-- [ ] **Phase 8** — LinkedIn Jobs scraper
-- [ ] **Phase 9** — CV auto-matching with semantic similarity
-- [ ] **Phase 10** — One-click apply draft generation (GPT-4o)
-- [ ] **Phase 11** — Email digest fallback (SMTP)
-- [ ] **Phase 12** — Public demo deployment (Fly.io / Render)
+| Problem | v2 Solution |
+|---------|-------------|
+| Hardcoded 20 Big Tech companies only | 40+ companies + 5-layer ATS detection |
+| Blind URL guessing (failed for 90%) | Workday JSON API, Greenhouse/Lever detection |
+| No Irish company support | ESB, eir, AIB, Irish Life, Vodafone IE etc. |
+| Silent failures on ATS-hosted jobs | Classified failure types + graceful fallback |
+| No benefit-of-doubt scoring | company_volume + not_a_repost give benefit of doubt |
+| No cross-source deduplication | Title+company fingerprint hash dedup |
+| Dashboard too basic | Full HTMX filtering, Kanban tracker, company intel |
 
 ---
 
-## ⚙️ Environment Variables
-
-| Variable | Required | Default | Description |
-|---|---|---|---|
-| `DATABASE_URL` | ✅ | — | PostgreSQL connection string |
-| `REDIS_URL` | ✅ | — | Redis connection string |
-| `OPENAI_API_KEY` | ⚠️ optional | — | Enables AI relevance scoring |
-| `TELEGRAM_BOT_TOKEN` | ⚠️ optional | — | Enables Telegram notifications |
-| `TELEGRAM_CHAT_ID` | ⚠️ optional | — | Your personal chat ID |
-| `SCRAPE_INTERVAL_HOURS` | ❌ | `12` | How often the scraper runs |
-| `SCRAPE_SOURCES` | ❌ | `all` | `all` \| `ij` \| `indeed` |
-| `AI_SCORE_ENABLED` | ❌ | `false` | Enable OpenAI scoring in scorer service |
-| `TG_ALERT_MIN_SCORE` | ❌ | `85` | Score threshold for instant Telegram alert |
-| `TG_DIGEST_MIN_SCORE` | ❌ | `70` | Score threshold for daily digest |
-| `TG_DIGEST_HOUR` | ❌ | `9` | Hour for daily digest (24h local time) |
-| `DASHBOARD_PORT` | ❌ | `5000` | Flask listen port |
-| `FLASK_ENV` | ❌ | `development` | `development` \| `production` |
-
-See [`.env.example`](.env.example) for the full reference.
-
----
-
-## 🧪 Running Tests
-
-```bash
-pip install pytest pytest-asyncio pytest-cov
-pytest tests/ --cov=core --cov=scrapers -v
-```
-
-CI runs the same suite against a real PostgreSQL + Redis container on every push. See [`.github/workflows/ci.yml`](.github/workflows/ci.yml).
-
----
-
-## 🐳 Container Registry
-
-Every push to `main` builds and pushes a multi-platform image (`linux/amd64` + `linux/arm64`) to GitHub Container Registry:
-
-```bash
-docker pull ghcr.io/ghorpadeire/job-discovery-system:latest
-```
-
----
-
-## 👤 About the Author
-
-**Pranav Ghorpade**
-
-MSc Cybersecurity — National College of Ireland, Dublin
-CEH Master certified
-Stamp 1G (Graduate) — open to entry-level opportunities in Dublin and remote-Europe roles
-
-This project was built as a portfolio piece to demonstrate end-to-end engineering skills across:
-- Python backend development (async, ORM, scheduling, REST)
-- Data engineering (scraping, deduplication, normalisation)
-- DevOps (Docker Compose, GitHub Actions, GHCR, multi-platform builds)
-- AI integration (OpenAI embeddings + GPT reasoning)
-- Frontend (Flask, HTMX, Bootstrap 5)
-
-> **Target roles:** Junior Software Developer (Java/Python) · Junior Cybersecurity Analyst · IT Support
-
-📎 [github.com/ghorpadeire](https://github.com/ghorpadeire)
-📍 Dublin, Ireland
-
----
-
-## 📄 License
-
-MIT — see [LICENSE](LICENSE) for details.
+*Built with Python 3.13, PostgreSQL 16, Playwright, Flask, Bootstrap 5.3, HTMX 2.0*

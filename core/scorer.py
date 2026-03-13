@@ -1,46 +1,44 @@
 """
-Legitimacy scoring engine — scores each job 0-100 across 7 signals.
+7-Signal Legitimacy Scorer.
 
-Signal table
-------------
-#  Name                 Max pts  Description
-1  career_page_match     25      Job title appears on the company's own careers site
-2  recently_posted       20      date_posted within last 14 days
-3  company_volume        15      Company NOT known to have <3 active DB roles (benefit of doubt)
-4  not_a_repost          15      Job first_seen within last 30 days (not recycled listing)
-5  url_resolves          10      The apply URL returns HTTP 2xx
-6  has_salary            10      Salary field is populated
-7  rich_description       5      Description length > 200 words (fetched from URL)
-                         ---
-                         100
+Score range: 0–100
+Ghost threshold: < 30
 
-Jobs scoring < 30 are flagged as suspected_ghost = True.
+Signals:
+  1. career_page_match   25 pts  — title found on company's own careers page
+  2. recently_posted     20 pts  — posted within last 14 days
+  3. company_volume      15 pts  — company has ≥3 active jobs (benefit of doubt if 0)
+  4. not_a_repost        15 pts  — first seen ≤30 days ago (benefit of doubt if unknown)
+  5. url_resolves        10 pts  — URL returns HTTP < 400
+  6. has_salary          10 pts  — salary field is non-empty
+  7. rich_description     5 pts  — page word count ≥ 200
+
+Design principle: penalise only when there is *confirmed* evidence of low quality.
+If data is absent/unknown → benefit of the doubt.
 """
 import logging
 import re
-from datetime import datetime, timedelta, timezone
+from datetime import datetime, timezone
 from typing import Optional
 
 import httpx
 from dateutil import parser as dateutil_parser
 from sqlalchemy.orm import Session
 
-from core.career_checker import title_matches_career_page
 from core.models import Job
 
 logger = logging.getLogger(__name__)
 
-# ---------------------------------------------------------------------------
-# Constants
-# ---------------------------------------------------------------------------
+# ──────────────────────────────────────────────────────────
+#  Constants
+# ──────────────────────────────────────────────────────────
+GHOST_THRESHOLD = 30
+RECENT_DAYS     = 14
+REPOST_DAYS     = 30
+MIN_VOLUME      = 3
+MIN_DESC_WORDS  = 200
 
-GHOST_THRESHOLD   = 30   # suspected_ghost = True below this score
-RECENT_DAYS       = 14   # Signal 2: posted within N days
-REPOST_DAYS       = 30   # Signal 4: first_seen within N days
-MIN_VOLUME        = 3    # Signal 3: company needs at least this many active jobs
-MIN_DESC_WORDS    = 200  # Signal 7: minimum words in description
-
-SIGNAL_WEIGHTS = {
+SIGNAL_WEIGHTS: dict[str, int] = {
     "career_page_match": 25,
     "recently_posted":   20,
     "company_volume":    15,
@@ -50,197 +48,234 @@ SIGNAL_WEIGHTS = {
     "rich_description":   5,
 }
 
-# ---------------------------------------------------------------------------
-# Helpers
-# ---------------------------------------------------------------------------
+_HTTP_CLIENT = httpx.Client(
+    timeout=httpx.Timeout(10.0),
+    headers={"User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) Chrome/120.0.0.0"},
+    follow_redirects=True,
+)
 
-def _parse_date(raw: Optional[str]) -> Optional[datetime]:
+# ──────────────────────────────────────────────────────────
+#  Volume cache (per-run, avoids repeated DB queries)
+# ──────────────────────────────────────────────────────────
+class _VolumeCache:
+    def __init__(self):
+        self._cache: dict[str, int] = {}
+
+    def get(self, session: Session, company: str) -> int:
+        key = company.lower().strip()
+        if key not in self._cache:
+            count = (
+                session.query(Job)
+                .filter(Job.company.ilike(f"%{company}%"), Job.is_active == True)
+                .count()
+            )
+            self._cache[key] = count
+        return self._cache[key]
+
+    def clear(self):
+        self._cache.clear()
+
+
+# ──────────────────────────────────────────────────────────
+#  Date parsing
+# ──────────────────────────────────────────────────────────
+
+def _parse_date(raw: str) -> Optional[datetime]:
     """
-    Parse a raw date string from a job posting.  Handles:
-      - ISO dates:        "2025-05-01"
-      - UK/EU dates:      "01/05/2025"
-      - Relative strings: "2 days ago", "Posted today", "30+ days ago"
-    Returns a timezone-aware UTC datetime, or None on failure.
+    Parse human-readable and ISO date strings into UTC datetime.
+
+    Handles:
+      "today", "just posted", "X hours ago", "X days ago",
+      "X weeks ago", "X months ago", ISO 8601, DD/MM/YYYY
     """
     if not raw:
         return None
-    raw = raw.strip()
     now = datetime.now(timezone.utc)
+    raw_lower = raw.lower().strip()
 
-    # Relative patterns
-    m = re.match(r"(\d+)\+?\s+days?\s+ago", raw, re.IGNORECASE)
-    if m:
-        return now - timedelta(days=int(m.group(1)))
-
-    for pat in (r"today", r"just\s+posted", r"less\s+than\s+a\s+day"):
-        if re.search(pat, raw, re.IGNORECASE):
+    try:
+        # Relative time expressions
+        if raw_lower in ("today", "just posted", "0 days ago"):
             return now
 
-    m = re.match(r"(\d+)\s+hours?\s+ago", raw, re.IGNORECASE)
-    if m:
-        return now - timedelta(hours=int(m.group(1)))
+        m = re.search(r"(\d+)\s+(hour|day|week|month)s?\s+ago", raw_lower)
+        if m:
+            n, unit = int(m.group(1)), m.group(2)
+            from datetime import timedelta
+            deltas = {
+                "hour":  timedelta(hours=n),
+                "day":   timedelta(days=n),
+                "week":  timedelta(weeks=n),
+                "month": timedelta(days=n * 30),
+            }
+            return now - deltas[unit]
 
-    m = re.match(r"(\d+)\s+weeks?\s+ago", raw, re.IGNORECASE)
-    if m:
-        return now - timedelta(weeks=int(m.group(1)))
+        # DD/MM/YYYY (European format)
+        m2 = re.match(r"(\d{1,2})/(\d{1,2})/(\d{4})", raw)
+        if m2:
+            d, mo, y = int(m2.group(1)), int(m2.group(2)), int(m2.group(3))
+            return datetime(y, mo, d, tzinfo=timezone.utc)
 
-    m = re.match(r"(\d+)\s+months?\s+ago", raw, re.IGNORECASE)
-    if m:
-        return now - timedelta(days=int(m.group(1)) * 30)
+        # Fallback: dateutil
+        return dateutil_parser.parse(raw, dayfirst=True).replace(tzinfo=timezone.utc)
 
-    # Absolute date — let dateutil handle all formats
-    try:
-        dt = dateutil_parser.parse(raw, dayfirst=True)
-        if dt.tzinfo is None:
-            dt = dt.replace(tzinfo=timezone.utc)
-        return dt
-    except Exception:
+    except Exception as exc:
+        logger.debug("_parse_date could not parse %r: %s", raw, exc)
         return None
 
 
-def _fetch_description(url: str, timeout: int = 10) -> str:
-    """
-    Fetch a job description page and return its visible text (~best effort).
-    Returns an empty string on any failure.
-    """
-    if not url:
-        return ""
+# ──────────────────────────────────────────────────────────
+#  HTTP helpers
+# ──────────────────────────────────────────────────────────
+
+def _fetch_description(url: str) -> str:
+    """Fetch URL, strip HTML tags, return plain text. Returns '' on error."""
     try:
-        r = httpx.get(
-            url,
-            follow_redirects=True,
-            timeout=timeout,
-            headers={"User-Agent": "Mozilla/5.0 (compatible; JobBot/1.0)"},
-        )
-        if r.status_code >= 400:
+        resp = _HTTP_CLIENT.get(url, timeout=10.0)
+        if resp.status_code >= 400:
             return ""
-        # Strip tags, collapse whitespace
-        text = re.sub(r"<[^>]+>", " ", r.text)
-        return re.sub(r"\s+", " ", text).strip()
-    except Exception:
+        html = resp.text
+        text = re.sub(r"<[^>]+>", " ", html)
+        text = re.sub(r"\s+", " ", text)
+        return text.strip()
+    except Exception as exc:
+        logger.debug("_fetch_description failed for %s: %s", url, exc)
         return ""
 
 
-def _url_resolves(url: str, timeout: int = 8) -> bool:
-    """HEAD request — return True on 2xx/3xx response."""
-    if not url:
-        return False
+def _url_resolves(url: str) -> bool:
+    """Return True if URL responds with HTTP status < 400."""
     try:
-        r = httpx.head(url, follow_redirects=True, timeout=timeout,
-                       headers={"User-Agent": "Mozilla/5.0 (compatible; JobBot/1.0)"})
-        return r.status_code < 400
+        resp = _HTTP_CLIENT.head(url, timeout=8.0)
+        return resp.status_code < 400
     except Exception:
-        return False
+        # HEAD not supported — try GET
+        try:
+            resp = _HTTP_CLIENT.get(url, timeout=8.0)
+            return resp.status_code < 400
+        except Exception:
+            return False
 
 
-# ---------------------------------------------------------------------------
-# Company volume cache (per scoring run, avoids repeated DB queries)
-# ---------------------------------------------------------------------------
-
-class _VolumeCache:
-    def __init__(self, session: Session):
-        self._session = session
-        self._cache: dict[str, int] = {}
-
-    def count(self, company: str) -> int:
-        key = company.lower().strip()
-        if key not in self._cache:
-            self._cache[key] = (
-                self._session.query(Job)
-                .filter(Job.is_active == True)
-                .filter(Job.company.ilike(f"%{key}%"))
-                .count()
-            )
-        return self._cache[key]
-
-
-# ---------------------------------------------------------------------------
-# Core scorer
-# ---------------------------------------------------------------------------
-
+# ──────────────────────────────────────────────────────────
+#  JobScorer
+# ──────────────────────────────────────────────────────────
 class JobScorer:
-    """
-    Score a single Job row.
+    def __init__(self, check_career_page: bool = True):
+        self.check_career_page = check_career_page
+        self._vol_cache = _VolumeCache()
+        self._session: Optional[Session] = None
 
-    Usage
-    -----
-        scorer = JobScorer(session, check_career_page=True)
-        score, breakdown = scorer.score(job)
-    """
-
-    def __init__(self, session: Session, check_career_page: bool = True):
-        self._session       = session
-        self._vol_cache     = _VolumeCache(session)
-        self._check_career  = check_career_page
-
-    # ------------------------------------------------------------------ #
-    # Public                                                               #
-    # ------------------------------------------------------------------ #
+    def set_session(self, session: Session):
+        self._session = session
+        self._vol_cache.clear()
 
     def score(self, job: Job) -> tuple[int, dict[str, int]]:
         """
-        Calculate and return (total_score, breakdown_dict).
-        Does NOT write to the DB — callers decide when to commit.
+        Score a single job.
+        Returns (total_score, breakdown_dict).
+        Never raises — all signals are individually guarded.
         """
         breakdown: dict[str, int] = {}
-        now = datetime.now(timezone.utc)
 
-        # Signal 1 — career page match (25 pts)
-        if self._check_career:
-            try:
-                hit = title_matches_career_page(job.title, job.company)
-                breakdown["career_page_match"] = SIGNAL_WEIGHTS["career_page_match"] if hit else 0
-            except Exception as exc:
-                logger.debug(f"  signal 1 error: {exc}")
+        # ── Signal 1: career_page_match ─────────────────────────
+        try:
+            if self.check_career_page:
+                from core.career_checker import title_matches_career_page
+                match = title_matches_career_page(job.title, job.company)
+                breakdown["career_page_match"] = SIGNAL_WEIGHTS["career_page_match"] if match else 0
+            else:
                 breakdown["career_page_match"] = 0
-        else:
+        except Exception as exc:
+            logger.warning("Signal 1 error for job %s: %s", job.id, exc)
             breakdown["career_page_match"] = 0
 
-        # Signal 2 — recently posted (20 pts)
-        posted_dt = _parse_date(job.date_posted)
-        if posted_dt:
-            age_days = (now - posted_dt).days
-            breakdown["recently_posted"] = SIGNAL_WEIGHTS["recently_posted"] if age_days <= RECENT_DAYS else 0
-        else:
+        # ── Signal 2: recently_posted ────────────────────────────
+        try:
+            parsed = _parse_date(job.date_posted or "")
+            if parsed is None:
+                breakdown["recently_posted"] = 0
+            else:
+                age_days = (datetime.now(timezone.utc) - parsed).days
+                breakdown["recently_posted"] = (
+                    SIGNAL_WEIGHTS["recently_posted"] if age_days <= RECENT_DAYS else 0
+                )
+        except Exception as exc:
+            logger.warning("Signal 2 error for job %s: %s", job.id, exc)
             breakdown["recently_posted"] = 0
 
-        # Signal 3 — company volume (15 pts)
-        # Benefit of the doubt: award points unless we can positively confirm low volume
-        # (i.e. company IS in DB with fewer than MIN_VOLUME roles — not just unknown).
-        vol = self._vol_cache.count(job.company)
-        breakdown["company_volume"] = SIGNAL_WEIGHTS["company_volume"] if vol == 0 or vol >= MIN_VOLUME else 0
+        # ── Signal 3: company_volume ─────────────────────────────
+        try:
+            if self._session is None:
+                breakdown["company_volume"] = SIGNAL_WEIGHTS["company_volume"]  # benefit of doubt
+            else:
+                vol = self._vol_cache.get(self._session, job.company)
+                if vol == 0:
+                    # Company not seen before — benefit of doubt
+                    breakdown["company_volume"] = SIGNAL_WEIGHTS["company_volume"]
+                elif vol >= MIN_VOLUME:
+                    # Confirmed active hiring
+                    breakdown["company_volume"] = SIGNAL_WEIGHTS["company_volume"]
+                else:
+                    # vol is 1 or 2 — confirmed low volume
+                    breakdown["company_volume"] = 0
+        except Exception as exc:
+            logger.warning("Signal 3 error for job %s: %s", job.id, exc)
+            breakdown["company_volume"] = SIGNAL_WEIGHTS["company_volume"]
 
-        # Signal 4 — not a repost (15 pts)
-        first = job.first_seen
-        if first:
-            if first.tzinfo is None:
-                first = first.replace(tzinfo=timezone.utc)
-            age_days = (now - first).days
-            breakdown["not_a_repost"] = SIGNAL_WEIGHTS["not_a_repost"] if age_days <= REPOST_DAYS else 0
-        else:
-            breakdown["not_a_repost"] = SIGNAL_WEIGHTS["not_a_repost"]  # benefit of doubt
+        # ── Signal 4: not_a_repost ───────────────────────────────
+        try:
+            if job.first_seen is None:
+                breakdown["not_a_repost"] = SIGNAL_WEIGHTS["not_a_repost"]  # benefit of doubt
+            else:
+                first = job.first_seen
+                if first.tzinfo is None:
+                    first = first.replace(tzinfo=timezone.utc)
+                age_days = (datetime.now(timezone.utc) - first).days
+                breakdown["not_a_repost"] = (
+                    SIGNAL_WEIGHTS["not_a_repost"] if age_days <= REPOST_DAYS else 0
+                )
+        except Exception as exc:
+            logger.warning("Signal 4 error for job %s: %s", job.id, exc)
+            breakdown["not_a_repost"] = SIGNAL_WEIGHTS["not_a_repost"]
 
-        # Signal 5 — URL resolves (10 pts)
-        breakdown["url_resolves"] = SIGNAL_WEIGHTS["url_resolves"] if _url_resolves(job.url) else 0
+        # ── Signal 5: url_resolves ───────────────────────────────
+        try:
+            breakdown["url_resolves"] = (
+                SIGNAL_WEIGHTS["url_resolves"] if job.url and _url_resolves(job.url) else 0
+            )
+        except Exception as exc:
+            logger.warning("Signal 5 error for job %s: %s", job.id, exc)
+            breakdown["url_resolves"] = 0
 
-        # Signal 6 — has salary (10 pts)
-        breakdown["has_salary"] = SIGNAL_WEIGHTS["has_salary"] if job.salary else 0
+        # ── Signal 6: has_salary ─────────────────────────────────
+        breakdown["has_salary"] = (
+            SIGNAL_WEIGHTS["has_salary"]
+            if (job.salary and job.salary.strip())
+            else 0
+        )
 
-        # Signal 7 — rich description (5 pts)
-        desc = _fetch_description(job.url)
-        word_count = len(desc.split())
-        breakdown["rich_description"] = SIGNAL_WEIGHTS["rich_description"] if word_count >= MIN_DESC_WORDS else 0
+        # ── Signal 7: rich_description ───────────────────────────
+        try:
+            if job.url:
+                text = _fetch_description(job.url)
+                wc = len(text.split())
+                breakdown["rich_description"] = (
+                    SIGNAL_WEIGHTS["rich_description"] if wc >= MIN_DESC_WORDS else 0
+                )
+            else:
+                breakdown["rich_description"] = 0
+        except Exception as exc:
+            logger.warning("Signal 7 error for job %s: %s", job.id, exc)
+            breakdown["rich_description"] = 0
 
         total = sum(breakdown.values())
-        logger.debug(
-            f"  {job.title!r} @ {job.company!r}: {total}/100  {breakdown}"
-        )
         return total, breakdown
 
 
-# ---------------------------------------------------------------------------
-# Batch scorer
-# ---------------------------------------------------------------------------
+# ──────────────────────────────────────────────────────────
+#  Batch scoring
+# ──────────────────────────────────────────────────────────
 
 def score_all_active_jobs(
     engine,
@@ -248,41 +283,50 @@ def score_all_active_jobs(
     rescore: bool = False,
 ) -> int:
     """
-    Score every active, unscored job (or all active jobs if rescore=True).
-    Writes legitimacy_score, score_breakdown, suspected_ghost to DB.
+    Score all active jobs that haven't been scored yet (or all if rescore=True).
+    Commits every 20 jobs.
     Returns the number of jobs scored.
     """
-    scored = 0
-    with Session(engine) as session:
-        q = session.query(Job).filter(Job.is_active == True)
+    from sqlalchemy.orm import sessionmaker
+
+    SessionFactory = sessionmaker(bind=engine)
+    session = SessionFactory()
+    scorer = JobScorer(check_career_page=check_career_page)
+    scorer.set_session(session)
+    count = 0
+
+    try:
+        query = session.query(Job).filter(Job.is_active == True)
         if not rescore:
-            q = q.filter(Job.legitimacy_score == None)
-        jobs = q.all()
+            query = query.filter(Job.legitimacy_score == None)
 
-        if not jobs:
-            logger.info("No jobs to score.")
-            return 0
-
-        scorer = JobScorer(session, check_career_page=check_career_page)
+        jobs = query.all()
+        total = len(jobs)
+        logger.info("Scoring %d jobs (check_career_page=%s)", total, check_career_page)
 
         for i, job in enumerate(jobs, 1):
-            logger.info(f"  [{i}/{len(jobs)}] scoring: {job.title!r} @ {job.company!r}")
             try:
-                total, breakdown = scorer.score(job)
+                score, breakdown = scorer.score(job)
+                job.legitimacy_score = score
+                job.score_breakdown   = breakdown
+                job.suspected_ghost   = score < GHOST_THRESHOLD
+                count += 1
+
+                if count % 20 == 0:
+                    session.commit()
+                    logger.info("  Scored %d/%d jobs...", count, total)
+
             except Exception as exc:
-                logger.warning(f"  scoring error for job {job.id}: {exc}")
-                continue
-
-            job.legitimacy_score = total
-            job.score_breakdown  = breakdown
-            job.suspected_ghost  = (total < GHOST_THRESHOLD)
-            scored += 1
-
-            # Commit in small batches to avoid large transactions
-            if scored % 20 == 0:
-                session.commit()
-                logger.info(f"  committed {scored} so far…")
+                logger.error("Failed to score job id=%s: %s", job.id, exc)
+                session.rollback()
 
         session.commit()
+        logger.info("Scoring complete: %d jobs scored", count)
+        return count
 
-    return scored
+    except Exception as exc:
+        session.rollback()
+        logger.error("score_all_active_jobs failed: %s", exc)
+        return count
+    finally:
+        session.close()

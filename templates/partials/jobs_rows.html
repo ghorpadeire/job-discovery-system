@@ -1,113 +1,72 @@
-{% for job in jobs %}
-{% set sc = job.combined_score if job.combined_score is not none else 0 %}
-{% set ls = job.legitimacy_score if job.legitimacy_score is not none else 0 %}
-<tr>
-  <td>
-    <a href="{{ url_for('job_detail', job_id=job.id) }}"
-       class="text-decoration-none text-white fw-medium d-block"
-       style="max-width:280px">
-      {{ job.title | truncate(55, True) }}
-    </a>
-    {% if job.salary %}
-    <small class="text-success"><i class="bi bi-cash me-1"></i>{{ job.salary | truncate(30, True) }}</small>
-    {% endif %}
-  </td>
-
-  <td class="text-muted">{{ job.company | truncate(25, True) }}</td>
-
-  <!-- Combined score -->
-  <td>
-    {% if job.combined_score is not none %}
-    <span class="score-pill bg-{{ sc | score_class }}-subtle text-{{ sc | score_class }} fw-bold">
-      {{ "%.0f" | format(sc) }}
-    </span>
-    <div class="progress score-bar mt-1" style="width:70px">
-      <div class="progress-bar bg-{{ sc | score_class }}"
-           style="width:{{ sc | score_pct }}%"></div>
-    </div>
-    {% else %}
-    <span class="text-muted small">—</span>
-    {% endif %}
-  </td>
-
-  <!-- Legitimacy -->
-  <td>
-    {% if job.legitimacy_score is not none %}
-    <span class="badge bg-secondary-subtle text-secondary">{{ ls }}</span>
-    {% else %}
-    <span class="text-muted small">—</span>
-    {% endif %}
-  </td>
-
-  <!-- Relevance -->
-  <td>
-    {% if job.relevance_score is not none %}
-    <span class="badge bg-info-subtle text-info">{{ "%.1f" | format(job.relevance_score) }}/10</span>
-    {% else %}
-    <span class="text-muted small">—</span>
-    {% endif %}
-  </td>
-
-  <!-- Source -->
-  <td>
-    <span class="badge bg-dark text-muted border border-secondary">{{ job.source }}</span>
-  </td>
-
-  <!-- Posted -->
-  <td class="text-muted small">{{ job.first_seen | relative_date }}</td>
-
-  <!-- Ghost / status -->
-  <td>
-    {% if job.suspected_ghost %}
-    <span class="badge bg-warning-subtle text-warning">
-      <i class="bi bi-exclamation-triangle"></i> Ghost?
-    </span>
-    {% else %}
-    <span class="badge bg-success-subtle text-success">
-      <i class="bi bi-check-circle"></i> Active
-    </span>
-    {% endif %}
-  </td>
-
-  <!-- Actions -->
-  <td>
-    <div class="d-flex gap-1">
-      <a href="{{ url_for('job_detail', job_id=job.id) }}"
-         class="btn btn-sm btn-outline-secondary py-0 px-1"
-         title="View details">
-        <i class="bi bi-eye"></i>
-      </a>
-      {% if job.url %}
-      <a href="{{ job.url }}" target="_blank" rel="noopener noreferrer"
-         class="btn btn-sm btn-outline-secondary py-0 px-1"
-         title="Open listing">
-        <i class="bi bi-box-arrow-up-right"></i>
-      </a>
-      {% endif %}
-      <form action="{{ url_for('tracker_add', job_id=job.id) }}" method="POST" class="d-inline">
-        <button type="submit"
-                class="btn btn-sm btn-outline-primary py-0 px-1"
-                title="Add to tracker">
-          <i class="bi bi-bookmark-plus"></i>
-        </button>
-      </form>
-    </div>
-  </td>
-</tr>
-{% else %}
-<tr>
-  <td colspan="9" class="text-center text-muted py-4">
-    <i class="bi bi-search me-1"></i>No jobs match the current filters.
-  </td>
-</tr>
-{% endfor %}
-
-<!-- Result count footer -->
 {% if jobs %}
-<tr class="table-dark">
-  <td colspan="9" class="text-muted small py-1 px-3">
-    Showing {{ jobs | length }} jobs
-    {% if jobs | length == 200 %} (limit 200 — refine filters for fewer results){% endif %}
-  </td>
-</tr>
+    {% for job in jobs %}
+    <tr onclick="window.location='/jobs/{{ job.id }}'" style="cursor:pointer">
+        <td>
+            {% if job.legitimacy_score is not none %}
+                {% if job.legitimacy_score >= 85 %}
+                    <span class="score-badge score-very-high">{{ job.legitimacy_score }}</span>
+                {% elif job.legitimacy_score >= 70 %}
+                    <span class="score-badge score-high">{{ job.legitimacy_score }}</span>
+                {% elif job.legitimacy_score >= 50 %}
+                    <span class="score-badge score-medium">{{ job.legitimacy_score }}</span>
+                {% else %}
+                    <span class="score-badge score-low">{{ job.legitimacy_score }}</span>
+                {% endif %}
+            {% else %}
+                <span class="score-badge score-unscored">—</span>
+            {% endif %}
+        </td>
+        <td>
+            <div class="fw-medium">{{ job.title[:60] }}{% if job.title|length > 60 %}…{% endif %}</div>
+            {% if job.suspected_ghost %}
+            <span class="ghost-badge">👻 ghost</span>
+            {% endif %}
+        </td>
+        <td class="text-muted">{{ job.company[:35] }}{% if job.company|length > 35 %}…{% endif %}</td>
+        <td class="text-muted">
+            {% if job.location %}
+            <i class="bi bi-geo-alt" style="font-size:0.75rem"></i>
+            {{ job.location[:25] }}{% if job.location|length > 25 %}…{% endif %}
+            {% else %}
+            <span class="text-muted">—</span>
+            {% endif %}
+        </td>
+        <td class="text-muted">
+            {% if job.salary %}
+            <i class="bi bi-currency-euro" style="font-size:0.75rem"></i>
+            {{ job.salary[:25] }}{% if job.salary|length > 25 %}…{% endif %}
+            {% else %}
+            <span class="text-muted">—</span>
+            {% endif %}
+        </td>
+        <td class="text-muted">{{ job.first_seen | timeago }}</td>
+        <td>
+            <span class="score-badge source-{{ job.source or 'unknown' }}" style="font-size:0.68rem">
+                {{ job.source or '?' }}
+            </span>
+        </td>
+        <td>
+            <a href="/jobs/{{ job.id }}" class="btn btn-sm btn-outline-secondary py-0 px-2"
+               onclick="event.stopPropagation()" style="font-size:0.72rem">
+                View
+            </a>
+        </td>
+    </tr>
+    {% endfor %}
+    <!-- Pagination info row -->
+    <tr class="border-top border-secondary border-opacity-10">
+        <td colspan="8" class="text-center text-muted py-2" style="font-size:0.75rem">
+            Showing {{ jobs|length }} of {{ total }} jobs
+            {% if total > per_page %}
+            — <a href="#" onclick="loadMore({{ page + 1 }})" class="text-primary">Load more</a>
+            {% endif %}
+        </td>
+    </tr>
+{% else %}
+    <tr>
+        <td colspan="8" class="text-center py-5 text-muted">
+            <i class="bi bi-inbox" style="font-size:2.5rem; display:block; margin-bottom:0.5rem"></i>
+            No jobs match your filters.
+        </td>
+    </tr>
 {% endif %}

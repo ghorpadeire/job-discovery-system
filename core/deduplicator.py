@@ -1,28 +1,14 @@
 """
-Cross-source deduplication layer.
+Cross-source job deduplication.
 
-Two jobs are treated as duplicates when their *normalised* (title, company)
-fingerprints match — even if the raw strings differ slightly, e.g.:
-
-    "Junior Java Developer"  @ "Accenture Ireland Ltd."
-    "Java Developer (Entry)" @ "Accenture"
-
-Both normalise to the same key and will be merged.
-
-Merge rules
------------
-- The record with the earliest `first_seen` is kept as canonical.
-- Its `sources` list absorbs all sources from the duplicates.
-- Missing fields (url, salary, date_posted) are back-filled from duplicates.
-- Duplicate records are marked `is_active = False`.
-
-This runs *after* all scrapers have finished for the session.
+Priority:
+  1. Exact URL match
+  2. Normalised title + company fingerprint hash
 """
 import hashlib
 import logging
 import re
-from collections import defaultdict
-from datetime import datetime
+from typing import Optional
 
 from sqlalchemy.orm import Session
 
@@ -30,107 +16,129 @@ from core.models import Job
 
 logger = logging.getLogger(__name__)
 
-# ---------------------------------------------------------------------------
-# Normalisation helpers
-# ---------------------------------------------------------------------------
+# Suffixes to strip from company names
+_COMPANY_SUFFIXES = re.compile(
+    r"\b(ltd|limited|plc|inc|llc|corp|corporation|group|ireland|dublin|"
+    r"technologies|technology|solutions|services|consulting|international)\b",
+    re.IGNORECASE,
+)
 
+# Strip seniority prefixes/suffixes from titles for fingerprinting
 _TITLE_NOISE = re.compile(
-    r"\b(junior|senior|lead|principal|staff|associate|graduate|grad|"
-    r"jr\.?|sr\.?|entry[\s\-]level|new\s+grad|mid[\s\-]level|contract|"
-    r"permanent|temp(?:orary)?|hybrid|remote|onsite|part[\s\-]time|"
-    r"full[\s\-]time)\b"
-    r"|\(.*?\)"          # anything in parentheses
-    r"|\[.*?\]",         # anything in square brackets
-    re.IGNORECASE,
-)
-
-_COMPANY_NOISE = re.compile(
-    r"\b(ltd\.?|limited|plc\.?|inc\.?|llc|gmbh|b\.v\.|s\.a\.|"
-    r"ireland|dublin|group|holdings|technologies|technology|"
-    r"solutions|services|consulting|international|global)\b\.?",
+    r"\b(junior|senior|lead|principal|staff|associate|graduate|mid[-\s]level|"
+    r"entry[-\s]level|contract|permanent|part[-\s]time|full[-\s]time)\b",
     re.IGNORECASE,
 )
 
 
-def _norm_title(title: str) -> str:
-    t = _TITLE_NOISE.sub(" ", title.lower())
+# ─────────────────────────────────────────────
+#  Normalisation helpers
+# ─────────────────────────────────────────────
+
+def normalize_title(title: str) -> str:
+    """Lowercase, strip seniority noise, remove punctuation, collapse whitespace."""
+    t = title.lower()
+    t = _TITLE_NOISE.sub("", t)
     t = re.sub(r"[^\w\s]", " ", t)
-    return " ".join(t.split())
+    t = re.sub(r"\s+", " ", t).strip()
+    return t
 
 
-def _norm_company(company: str) -> str:
-    c = _COMPANY_NOISE.sub(" ", company.lower())
+def normalize_company(company: str) -> str:
+    """Strip Ltd/Limited/plc suffixes, lowercase, collapse whitespace."""
+    c = company.lower()
+    c = _COMPANY_SUFFIXES.sub("", c)
     c = re.sub(r"[^\w\s]", " ", c)
-    return " ".join(c.split())
+    c = re.sub(r"\s+", " ", c).strip()
+    return c
 
 
-def normalised_fingerprint(title: str, company: str) -> str:
-    """MD5 of (normalised title | normalised company)."""
-    key = f"{_norm_title(title)}|{_norm_company(company)}"
+def job_fingerprint(title: str, company: str) -> str:
+    """Return an MD5 hash of the normalised title + company pair."""
+    key = f"{normalize_title(title)}|{normalize_company(company)}"
     return hashlib.md5(key.encode()).hexdigest()
 
 
-# ---------------------------------------------------------------------------
-# Main dedup function
-# ---------------------------------------------------------------------------
+# ─────────────────────────────────────────────
+#  DB lookup
+# ─────────────────────────────────────────────
+
+def find_duplicate(session: Session, title: str, company: str, url: str) -> Optional[Job]:
+    """
+    Return an existing Job that matches this posting, or None if it's new.
+
+    Strategy:
+      1. Exact URL match (fastest, most reliable)
+      2. Title+company fingerprint match (catches cross-source dupes)
+    """
+    # 1. Exact URL
+    existing = session.query(Job).filter(Job.url == url).first()
+    if existing:
+        return existing
+
+    # 2. Fingerprint — scan only active jobs to avoid touching archived data
+    fp = job_fingerprint(title, company)
+    for job in session.query(Job).filter(Job.is_active == True).all():
+        if job_fingerprint(job.title, job.company) == fp:
+            return job
+
+    return None
+
+
+# ─────────────────────────────────────────────
+#  Batch merge
+# ─────────────────────────────────────────────
 
 def merge_duplicates(engine) -> int:
     """
-    Scan all active jobs, group by normalised fingerprint, and merge groups
-    that contain more than one record.
-
-    Returns the number of duplicate records deactivated.
+    Batch deduplication pass.
+    - Groups jobs by URL and deactivates older duplicates
+    - Groups by title+company fingerprint and merges cross-source dupes
+    Returns the number of duplicates deactivated.
     """
-    merged_count = 0
+    from datetime import datetime, timezone
+    from sqlalchemy.orm import sessionmaker
 
-    with Session(engine) as session:
-        active_jobs: list[Job] = (
-            session.query(Job).filter_by(is_active=True).all()
-        )
+    Session = sessionmaker(bind=engine)
+    session = Session()
+    deactivated = 0
 
-        # Group by normalised fingerprint
-        groups: dict[str, list[Job]] = defaultdict(list)
-        for job in active_jobs:
-            nfp = normalised_fingerprint(job.title, job.company)
-            groups[nfp].append(job)
+    try:
+        # ── URL duplicates ──────────────────────────────────────────────
+        url_seen: dict[str, int] = {}
+        for job in session.query(Job).filter(Job.is_active == True).order_by(Job.first_seen).all():
+            if job.url in url_seen:
+                # Keep the older record (first_seen earlier), deactivate this one
+                job.is_active = False
+                deactivated += 1
+                logger.debug("Deactivated URL duplicate: %s", job.url)
+            else:
+                url_seen[job.url] = job.id
 
-        for nfp, jobs in groups.items():
-            if len(jobs) == 1:
-                continue
-
-            # Sort: oldest first → that's the canonical record
-            jobs.sort(key=lambda j: j.first_seen or datetime.min)
-            canonical = jobs[0]
-            duplicates = jobs[1:]
-
-            # Merge sources and back-fill missing fields
-            merged_sources = set(canonical.sources or [])
-            for dup in duplicates:
-                merged_sources.update(dup.sources or [])
-                if not canonical.salary      and dup.salary:      canonical.salary      = dup.salary
-                if not canonical.url         and dup.url:         canonical.url         = dup.url
-                if not canonical.date_posted and dup.date_posted: canonical.date_posted = dup.date_posted
-
-                dup.is_active = False
-                merged_count += 1
+        # ── Fingerprint duplicates ──────────────────────────────────────
+        fp_seen: dict[str, Job] = {}
+        for job in session.query(Job).filter(Job.is_active == True).order_by(Job.first_seen).all():
+            fp = job_fingerprint(job.title, job.company)
+            if fp in fp_seen:
+                survivor = fp_seen[fp]
+                # Update last_seen on survivor, deactivate this duplicate
+                survivor.last_seen = datetime.now(timezone.utc)
+                job.is_active = False
+                deactivated += 1
                 logger.debug(
-                    f"  Merged dup id={dup.id} '{dup.title}' @ '{dup.company}' "
-                    f"{dup.sources} → canonical id={canonical.id}"
+                    "Deactivated fingerprint duplicate: '%s' @ '%s' (survivor id=%s)",
+                    job.title, job.company, survivor.id,
                 )
-
-            canonical.sources = sorted(merged_sources)
+            else:
+                fp_seen[fp] = job
 
         session.commit()
+        logger.info("merge_duplicates: deactivated %d duplicates", deactivated)
+        return deactivated
 
-    return merged_count
-
-
-# ---------------------------------------------------------------------------
-# Reporting helper
-# ---------------------------------------------------------------------------
-
-def multi_source_jobs(engine) -> list[Job]:
-    """Return all active jobs found on more than one platform."""
-    with Session(engine) as session:
-        jobs = session.query(Job).filter_by(is_active=True).all()
-        return [j for j in jobs if len(j.sources or []) > 1]
+    except Exception as exc:
+        session.rollback()
+        logger.error("merge_duplicates failed: %s", exc)
+        return 0
+    finally:
+        session.close()

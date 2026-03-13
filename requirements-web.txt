@@ -1,23 +1,10 @@
-# requirements-web.txt
-# Lightweight deps for the Flask dashboard only (no Playwright, no scrapers).
-# Used by Render's native Python web service to keep builds fast.
-
-# Web framework
-flask>=3.0.0
-gunicorn>=21.0.0
-
-# Database
+# Render web service — dashboard only (no Playwright, no scrapers)
+# Lighter than requirements.txt, faster Render build
 sqlalchemy>=2.0.0
 psycopg2-binary>=2.9.9
-
-# Cache / Redis
-redis>=5.0.0
-
-# HTTP (URL-resolve signal in scorer — imported transitively)
-httpx[async]>=0.27.0
-
-# Config
 python-dotenv>=1.0.0
-
-# Date parsing
+flask>=3.0.0
+gunicorn>=21.2.0
+redis>=5.0.0
 python-dateutil>=2.9.0
+httpx>=0.27.0

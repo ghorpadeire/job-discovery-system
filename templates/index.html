@@ -1,184 +1,280 @@
 {% extends "base.html" %}
-{% block title %}Dashboard{% endblock %}
+{% block title %}Home — JobScout{% endblock %}
 
 {% block content %}
-<div class="d-flex align-items-center justify-content-between mb-4">
-  <div>
-    <h1 class="h3 fw-bold mb-0">Dashboard</h1>
-    <p class="text-muted mb-0 small">Job discovery system overview</p>
-  </div>
-  <a href="{{ url_for('jobs') }}" class="btn btn-primary btn-sm">
-    <i class="bi bi-table me-1"></i>Browse All Jobs
-  </a>
-</div>
 
-<!-- ── Stat cards ── -->
-<div class="row g-3 mb-4">
-
-  <div class="col-6 col-md-4 col-xl-2">
-    <div class="card card-stat h-100 p-3">
-      <div class="stat-label mb-1"><i class="bi bi-briefcase me-1"></i>Active Jobs</div>
-      <div class="stat-number text-white">{{ total_active }}</div>
+<!-- ─── Hero greeting ───────────────────────────────────────────── -->
+<div class="d-flex align-items-center gap-3 mb-4">
+    <div>
+        <h4 class="mb-0 fw-bold">👋 Welcome back, Pranav</h4>
+        <p class="text-muted mb-0" style="font-size:0.85rem">
+            Here are the best real job opportunities in Ireland right now — ghost jobs already filtered out.
+        </p>
     </div>
-  </div>
-
-  <div class="col-6 col-md-4 col-xl-2">
-    <div class="card card-stat h-100 p-3">
-      <div class="stat-label mb-1"><i class="bi bi-graph-up me-1"></i>Avg Combined</div>
-      <div class="stat-number {% if avg_combined and avg_combined >= 50 %}text-success{% elif avg_combined %}text-warning{% else %}text-muted{% endif %}">
-        {{ avg_combined or '—' }}
-      </div>
-    </div>
-  </div>
-
-  <div class="col-6 col-md-4 col-xl-2">
-    <div class="card card-stat h-100 p-3">
-      <div class="stat-label mb-1"><i class="bi bi-calendar-plus me-1"></i>Added Today</div>
-      <div class="stat-number text-info">{{ added_today }}</div>
-    </div>
-  </div>
-
-  <div class="col-6 col-md-4 col-xl-2">
-    <div class="card card-stat h-100 p-3">
-      <div class="stat-label mb-1"><i class="bi bi-exclamation-triangle me-1"></i>Ghost Jobs</div>
-      <div class="stat-number text-warning">{{ ghost_count }}</div>
-    </div>
-  </div>
-
-  <div class="col-6 col-md-4 col-xl-2">
-    <div class="card card-stat h-100 p-3">
-      <div class="stat-label mb-1"><i class="bi bi-shield-check me-1"></i>High Conf ≥70</div>
-      <div class="stat-number text-success">{{ high_conf }}</div>
-    </div>
-  </div>
-
-  <div class="col-6 col-md-4 col-xl-2">
-    <div class="card card-stat h-100 p-3">
-      <div class="stat-label mb-1"><i class="bi bi-kanban me-1"></i>In Tracker</div>
-      <div class="stat-number text-primary">{{ in_tracker }}</div>
-    </div>
-  </div>
-
-</div>
-
-<!-- ── Score distribution + source breakdown ── -->
-<div class="row g-3 mb-4">
-  <div class="col-md-8">
-    <div class="card p-3">
-      <h6 class="fw-semibold mb-3"><i class="bi bi-bar-chart me-1 text-primary"></i>Top Jobs by Score</h6>
-      {% if top_jobs %}
-      <div class="table-responsive">
-        <table class="table table-hover align-middle mb-0">
-          <thead>
-            <tr>
-              <th>Title</th>
-              <th>Company</th>
-              <th>Score</th>
-              <th>Relevance</th>
-              <th>Source</th>
-              <th></th>
-            </tr>
-          </thead>
-          <tbody>
-            {% for job in top_jobs %}
-            <tr>
-              <td>
-                <a href="{{ url_for('job_detail', job_id=job.id) }}" class="text-decoration-none text-white fw-medium">
-                  {{ job.title | truncate(45, True) }}
-                </a>
-              </td>
-              <td class="text-muted">{{ job.company | truncate(22, True) }}</td>
-              <td>
-                {% set sc = job.combined_score | round(1) if job.combined_score else 0 %}
-                <span class="score-pill bg-{{ sc | score_class }}-subtle text-{{ sc | score_class }}">
-                  {{ "%.0f" | format(sc) }}
-                </span>
-                <div class="progress score-bar mt-1" style="width:60px">
-                  <div class="progress-bar bg-{{ sc | score_class }}"
-                       style="width:{{ sc | score_pct }}%"></div>
-                </div>
-              </td>
-              <td>
-                {% if job.relevance_score is not none %}
-                  <span class="badge bg-info-subtle text-info">{{ "%.1f" | format(job.relevance_score) }}/10</span>
-                {% else %}
-                  <span class="text-muted">—</span>
-                {% endif %}
-              </td>
-              <td><span class="badge bg-secondary-subtle text-secondary">{{ job.source }}</span></td>
-              <td>
-                <a href="{{ url_for('job_detail', job_id=job.id) }}" class="btn btn-xs btn-outline-secondary btn-sm py-0 px-1">
-                  <i class="bi bi-arrow-right"></i>
-                </a>
-              </td>
-            </tr>
-            {% endfor %}
-          </tbody>
-        </table>
-      </div>
-      <div class="mt-2">
-        <a href="{{ url_for('jobs') }}" class="btn btn-sm btn-outline-primary">
-          View all {{ total_active }} jobs <i class="bi bi-arrow-right ms-1"></i>
+    <div class="ms-auto">
+        <a href="/jobs?ghost=false&min_score=70&sort=date" class="btn btn-primary">
+            <i class="bi bi-search me-1"></i> Browse All Quality Jobs
         </a>
-      </div>
-      {% else %}
-      <p class="text-muted mb-0">No scored jobs yet. Run <code>py ai_score_jobs.py</code> first.</p>
-      {% endif %}
     </div>
-  </div>
-
-  <div class="col-md-4">
-    <div class="card p-3 h-100">
-      <h6 class="fw-semibold mb-3"><i class="bi bi-pie-chart me-1 text-info"></i>By Source</h6>
-      {% if source_stats %}
-        {% for row in source_stats %}
-        <div class="mb-3">
-          <div class="d-flex justify-content-between align-items-center mb-1">
-            <span class="text-white small fw-medium">{{ row.source }}</span>
-            <span class="text-muted small">{{ row.cnt }} jobs</span>
-          </div>
-          <div class="progress" style="height:8px">
-            {% set pct = (row.cnt / total_active * 100) | round(0) if total_active else 0 %}
-            <div class="progress-bar bg-primary" style="width:{{ pct }}%"></div>
-          </div>
-          <div class="text-muted" style="font-size:.73rem">
-            Avg score: {{ "%.1f" | format(row.avg_combined) if row.avg_combined else '—' }}
-          </div>
-        </div>
-        {% endfor %}
-      {% else %}
-        <p class="text-muted small">No data.</p>
-      {% endif %}
-
-      <!-- Legend -->
-      <hr class="my-2">
-      <div class="small text-muted">
-        <div class="d-flex gap-2 align-items-center mb-1">
-          <span class="badge bg-success">≥70</span> High confidence
-        </div>
-        <div class="d-flex gap-2 align-items-center mb-1">
-          <span class="badge bg-warning text-dark">40-69</span> Worth reviewing
-        </div>
-        <div class="d-flex gap-2 align-items-center">
-          <span class="badge bg-danger">&lt;40</span> Low / Ghost risk
-        </div>
-      </div>
-    </div>
-  </div>
 </div>
 
-<!-- ── Quick links ── -->
+<!-- ─── 6 Stat cards ────────────────────────────────────────────── -->
+<div class="row g-3 mb-4">
+    <div class="col-6 col-md-4 col-lg-2">
+        <div class="stat-card text-center">
+            <div class="stat-label">Jobs Found Today</div>
+            <div class="stat-value text-primary">{{ stats.new_today or 0 }}</div>
+            <div class="stat-sub">new listings</div>
+        </div>
+    </div>
+    <div class="col-6 col-md-4 col-lg-2">
+        <div class="stat-card text-center">
+            <div class="stat-label">Real Jobs ✓</div>
+            <div class="stat-value text-success">{{ stats.high or 0 }}</div>
+            <div class="stat-sub">score ≥ 70 / 100</div>
+        </div>
+    </div>
+    <div class="col-6 col-md-4 col-lg-2">
+        <div class="stat-card text-center">
+            <div class="stat-label">Top Picks 🌟</div>
+            <div class="stat-value" style="color:#22c55e">{{ stats.v_high or 0 }}</div>
+            <div class="stat-sub">score ≥ 85 / 100</div>
+        </div>
+    </div>
+    <div class="col-6 col-md-4 col-lg-2">
+        <div class="stat-card text-center">
+            <div class="stat-label">Ghost Jobs 👻</div>
+            <div class="stat-value text-danger">{{ stats.ghosts or 0 }}</div>
+            <div class="stat-sub">filtered out</div>
+        </div>
+    </div>
+    <div class="col-6 col-md-4 col-lg-2">
+        <div class="stat-card text-center">
+            <div class="stat-label">Avg Quality</div>
+            <div class="stat-value text-warning">{{ stats.avg_score or '—' }}</div>
+            <div class="stat-sub">out of 100</div>
+        </div>
+    </div>
+    <div class="col-6 col-md-4 col-lg-2">
+        <div class="stat-card text-center">
+            <div class="stat-label">Total Scanned</div>
+            <div class="stat-value">{{ stats.total or 0 }}</div>
+            <div class="stat-sub">all time</div>
+        </div>
+    </div>
+</div>
+
+<!-- ─── Main layout: Top jobs + Quick actions ────────────────────── -->
 <div class="row g-3">
-  <div class="col-12">
-    <div class="card p-3">
-      <h6 class="fw-semibold mb-3 text-muted"><i class="bi bi-terminal me-1"></i>Quick Commands</h6>
-      <div class="d-flex flex-wrap gap-2">
-        <code class="bg-dark text-success rounded px-2 py-1 small">py run_all.py</code>
-        <code class="bg-dark text-success rounded px-2 py-1 small">py ai_score_jobs.py --no-embed --no-score</code>
-        <code class="bg-dark text-success rounded px-2 py-1 small">py score_jobs.py --min-score 70</code>
-        <code class="bg-dark text-success rounded px-2 py-1 small">py telegram_bot.py</code>
-      </div>
+
+    <!-- LEFT: Top jobs to apply to RIGHT NOW -->
+    <div class="col-xl-8">
+        <div class="card-dark p-0">
+
+            <div class="d-flex justify-content-between align-items-center px-3 py-2"
+                 style="border-bottom:1px solid rgba(255,255,255,0.07)">
+                <div>
+                    <span class="fw-semibold" style="font-size:0.9rem">
+                        🎯 Apply to These Jobs Now
+                    </span>
+                    <span class="text-muted ms-2" style="font-size:0.75rem">
+                        Highest-confidence real jobs — sorted by legitimacy score
+                    </span>
+                </div>
+                <a href="/jobs?ghost=false&min_score=70&sort=score"
+                   class="btn btn-sm btn-outline-secondary" style="font-size:0.75rem">
+                    See all <i class="bi bi-arrow-right"></i>
+                </a>
+            </div>
+
+            <div class="table-responsive">
+                <table class="table table-borderless jobs-table mb-0">
+                    <thead>
+                        <tr style="border-bottom:1px solid rgba(255,255,255,0.05)">
+                            <th style="width:80px;padding-left:1rem">Score</th>
+                            <th>Job Title</th>
+                            <th>Company</th>
+                            <th>Location</th>
+                            <th style="width:90px">Salary?</th>
+                            <th style="width:100px">Posted</th>
+                        </tr>
+                    </thead>
+                    <tbody>
+                        {% for job in top_jobs %}
+                        <tr onclick="window.location='/jobs/{{ job.id }}'"
+                            title="Click to view full details and apply">
+                            <td style="padding-left:1rem">
+                                {% if job.legitimacy_score is not none %}
+                                    {% set s = job.legitimacy_score %}
+                                    {% if s >= 85 %}
+                                        <span class="score-badge score-very-high">{{ s }}</span>
+                                    {% elif s >= 70 %}
+                                        <span class="score-badge score-high">{{ s }}</span>
+                                    {% elif s >= 50 %}
+                                        <span class="score-badge score-medium">{{ s }}</span>
+                                    {% else %}
+                                        <span class="score-badge score-low">{{ s }}</span>
+                                    {% endif %}
+                                {% else %}
+                                    <span class="score-badge score-unscored">—</span>
+                                {% endif %}
+                            </td>
+                            <td>
+                                <div class="fw-medium">
+                                    {{ job.title[:52] }}{% if job.title|length > 52 %}…{% endif %}
+                                </div>
+                                {% if job.suspected_ghost %}
+                                    <span class="ghost-badge">👻 ghost</span>
+                                {% endif %}
+                            </td>
+                            <td class="text-muted">
+                                {{ job.company[:28] }}{% if job.company|length > 28 %}…{% endif %}
+                            </td>
+                            <td class="text-muted" style="font-size:0.78rem">
+                                {% if job.location %}
+                                    <i class="bi bi-geo-alt" style="font-size:0.7rem"></i>
+                                    {{ job.location[:20] }}{% if job.location|length > 20 %}…{% endif %}
+                                {% else %}
+                                    —
+                                {% endif %}
+                            </td>
+                            <td>
+                                {% if job.salary %}
+                                    <span class="text-success" style="font-size:0.75rem">✓ Listed</span>
+                                {% else %}
+                                    <span class="text-muted" style="font-size:0.75rem">Not given</span>
+                                {% endif %}
+                            </td>
+                            <td class="text-muted" style="font-size:0.78rem">
+                                {{ job.first_seen | timeago }}
+                            </td>
+                        </tr>
+                        {% else %}
+                        <tr>
+                            <td colspan="6" class="text-center py-5">
+                                <div style="font-size:3rem">🔍</div>
+                                <div class="fw-semibold mt-2">No jobs scraped yet</div>
+                                <div class="text-muted mt-1" style="font-size:0.82rem">
+                                    Close this window and double-click <strong>START.bat</strong> to run the scraper.
+                                </div>
+                            </td>
+                        </tr>
+                        {% endfor %}
+                    </tbody>
+                </table>
+            </div>
+
+        </div>
     </div>
-  </div>
+
+    <!-- RIGHT: Quick actions + source breakdown -->
+    <div class="col-xl-4">
+
+        <!-- What to do next — plain language -->
+        <div class="card-dark p-3 mb-3">
+            <div class="section-title mb-3">📋 What to Do</div>
+            <div class="d-flex flex-column gap-2">
+                <a href="/jobs?ghost=false&min_score=85&sort=score"
+                   class="btn btn-success btn-sm text-start d-flex align-items-center gap-2">
+                    <span style="font-size:1.2rem">🌟</span>
+                    <div>
+                        <div class="fw-semibold">Apply to Top Picks</div>
+                        <div style="font-size:0.7rem;opacity:0.8">Score ≥ 85 — highest confidence real jobs</div>
+                    </div>
+                </a>
+                <a href="/jobs?ghost=false&min_score=70&sort=date"
+                   class="btn btn-primary btn-sm text-start d-flex align-items-center gap-2">
+                    <span style="font-size:1.2rem">⏰</span>
+                    <div>
+                        <div class="fw-semibold">Newest Quality Jobs</div>
+                        <div style="font-size:0.7rem;opacity:0.8">Score ≥ 70, sorted by most recent</div>
+                    </div>
+                </a>
+                <a href="/tracker"
+                   class="btn btn-outline-warning btn-sm text-start d-flex align-items-center gap-2">
+                    <span style="font-size:1.2rem">📌</span>
+                    <div>
+                        <div class="fw-semibold">Track Your Applications</div>
+                        <div style="font-size:0.7rem;opacity:0.8">See Saved → Applied → Interview → Offer</div>
+                    </div>
+                </a>
+                <a href="/jobs?ghost=true"
+                   class="btn btn-outline-danger btn-sm text-start d-flex align-items-center gap-2">
+                    <span style="font-size:1.2rem">👻</span>
+                    <div>
+                        <div class="fw-semibold">Inspect Ghost Jobs</div>
+                        <div style="font-size:0.7rem;opacity:0.8">See what was filtered out and why</div>
+                    </div>
+                </a>
+                <a href="/companies"
+                   class="btn btn-outline-secondary btn-sm text-start d-flex align-items-center gap-2">
+                    <span style="font-size:1.2rem">🏢</span>
+                    <div>
+                        <div class="fw-semibold">Company Intelligence</div>
+                        <div style="font-size:0.7rem;opacity:0.8">Which companies are actively hiring?</div>
+                    </div>
+                </a>
+            </div>
+        </div>
+
+        <!-- Score legend — plain English -->
+        <div class="card-dark p-3 mb-3">
+            <div class="section-title mb-2">🔢 What Does the Score Mean?</div>
+            <div class="d-flex flex-column gap-1" style="font-size:0.8rem">
+                <div class="d-flex align-items-center gap-2">
+                    <span class="score-badge score-very-high" style="min-width:38px;text-align:center">85+</span>
+                    <span>Apply immediately — very likely a real job</span>
+                </div>
+                <div class="d-flex align-items-center gap-2">
+                    <span class="score-badge score-high" style="min-width:38px;text-align:center">70+</span>
+                    <span>Good listing — worth applying to</span>
+                </div>
+                <div class="d-flex align-items-center gap-2">
+                    <span class="score-badge score-medium" style="min-width:38px;text-align:center">50+</span>
+                    <span>Medium confidence — apply if relevant</span>
+                </div>
+                <div class="d-flex align-items-center gap-2">
+                    <span class="score-badge score-low" style="min-width:38px;text-align:center">&lt;50</span>
+                    <span>Possibly fake, recycled or expired</span>
+                </div>
+                <div class="d-flex align-items-center gap-2">
+                    <span class="ghost-badge" style="min-width:38px;text-align:center">👻</span>
+                    <span>Suspected ghost job — skip it</span>
+                </div>
+            </div>
+        </div>
+
+        <!-- Source breakdown -->
+        <div class="card-dark p-3">
+            <div class="section-title mb-2">📡 Job Sources</div>
+            {% set total_src = (stats.irishjobs or 0) + (stats.indeed or 0) %}
+            {% if total_src > 0 %}
+                <div class="mb-2">
+                    <div class="d-flex justify-content-between mb-1">
+                        <span class="score-badge source-irishjobs">IrishJobs.ie</span>
+                        <span class="text-muted" style="font-size:0.78rem">{{ stats.irishjobs or 0 }} jobs</span>
+                    </div>
+                    <div class="progress" style="height:5px;background:rgba(255,255,255,0.06)">
+                        <div class="progress-bar bg-success"
+                             style="width:{{ ((stats.irishjobs or 0) / total_src * 100)|int }}%"></div>
+                    </div>
+                </div>
+                <div>
+                    <div class="d-flex justify-content-between mb-1">
+                        <span class="score-badge source-indeed">Indeed Ireland</span>
+                        <span class="text-muted" style="font-size:0.78rem">{{ stats.indeed or 0 }} jobs</span>
+                    </div>
+                    <div class="progress" style="height:5px;background:rgba(255,255,255,0.06)">
+                        <div class="progress-bar"
+                             style="background:#7c3aed;width:{{ ((stats.indeed or 0) / total_src * 100)|int }}%"></div>
+                    </div>
+                </div>
+            {% else %}
+                <p class="text-muted mb-0" style="font-size:0.82rem">No data yet — run the scraper first.</p>
+            {% endif %}
+        </div>
+
+    </div>
 </div>
+
 {% endblock %}

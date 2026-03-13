@@ -1,145 +1,100 @@
 {% extends "base.html" %}
-{% block title %}Companies{% endblock %}
+{% block title %}Companies — Job Discovery{% endblock %}
 
 {% block content %}
-<div class="d-flex align-items-center justify-content-between mb-4">
-  <div>
-    <h1 class="h3 fw-bold mb-0">Company Credibility</h1>
-    <p class="text-muted mb-0 small">{{ rows | length }} companies in database</p>
-  </div>
+
+<div class="d-flex justify-content-between align-items-center mb-3">
+    <h5 class="mb-0 fw-bold"><i class="bi bi-building me-2"></i>Company Intelligence</h5>
+    <span class="text-muted" style="font-size:0.8rem">
+        Hiring patterns and legitimacy scores by company
+    </span>
 </div>
 
-<!-- Sort controls -->
-<div class="d-flex gap-2 mb-3 flex-wrap">
-  <span class="text-muted small align-self-center me-1">Sort by:</span>
-  {% set sorts = [
-    ('open_roles', 'Open Roles'),
-    ('avg_score',  'Avg Score'),
-    ('avg_legit',  'Avg Legit'),
-    ('ghost_rate', 'Ghost Rate'),
-    ('company',    'Company A-Z'),
-  ] %}
-  {% for key, label in sorts %}
-  <a href="{{ url_for('companies', sort=key) }}"
-     class="btn btn-sm {% if sort_by == key %}btn-primary{% else %}btn-outline-secondary{% endif %}">
-    {{ label }}
-  </a>
-  {% endfor %}
+<div class="card-dark p-0">
+    <div class="table-responsive">
+        <table class="table table-borderless jobs-table mb-0">
+            <thead>
+                <tr class="border-bottom border-secondary border-opacity-10">
+                    <th>Company</th>
+                    <th class="text-center">Total Jobs</th>
+                    <th class="text-center">Avg Score</th>
+                    <th class="text-center">Top Score</th>
+                    <th class="text-center">Ghost %</th>
+                    <th>Quality Bar</th>
+                </tr>
+            </thead>
+            <tbody>
+                {% for co in companies %}
+                <tr>
+                    <td>
+                        <a href="/jobs?q={{ co.name | urlencode }}" class="text-decoration-none">
+                            {{ co.name[:40] }}{% if co.name|length > 40 %}…{% endif %}
+                        </a>
+                    </td>
+                    <td class="text-center">
+                        <span class="badge bg-dark border border-secondary">{{ co.total_jobs }}</span>
+                    </td>
+                    <td class="text-center">
+                        {% if co.avg_score is not none %}
+                            {% if co.avg_score >= 70 %}
+                                <span class="score-badge score-high">{{ co.avg_score }}</span>
+                            {% elif co.avg_score >= 50 %}
+                                <span class="score-badge score-medium">{{ co.avg_score }}</span>
+                            {% else %}
+                                <span class="score-badge score-low">{{ co.avg_score }}</span>
+                            {% endif %}
+                        {% else %}
+                            <span class="text-muted">—</span>
+                        {% endif %}
+                    </td>
+                    <td class="text-center">
+                        {% if co.max_score is not none %}
+                            <span class="score-badge {% if co.max_score >= 85 %}score-very-high{% elif co.max_score >= 70 %}score-high{% else %}score-medium{% endif %}">
+                                {{ co.max_score }}
+                            </span>
+                        {% else %}
+                            <span class="text-muted">—</span>
+                        {% endif %}
+                    </td>
+                    <td class="text-center">
+                        {% set gp = co.ghost_pct | int %}
+                        {% if gp > 50 %}
+                            <span class="score-badge score-low">{{ gp }}%</span>
+                        {% elif gp > 25 %}
+                            <span class="score-badge score-medium">{{ gp }}%</span>
+                        {% else %}
+                            <span class="score-badge score-high">{{ gp }}%</span>
+                        {% endif %}
+                    </td>
+                    <td style="min-width:120px">
+                        {% if co.avg_score is not none %}
+                        <div class="progress" style="height:6px;background:rgba(255,255,255,0.06)">
+                            <div class="progress-bar"
+                                 style="width:{{ co.avg_score }}%;
+                                        background:{% if co.avg_score >= 70 %}#22c55e{% elif co.avg_score >= 50 %}#eab308{% else %}#ef4444{% endif %}">
+                            </div>
+                        </div>
+                        {% endif %}
+                    </td>
+                </tr>
+                {% else %}
+                <tr>
+                    <td colspan="6" class="text-center py-5 text-muted">
+                        <i class="bi bi-building" style="font-size:2.5rem;display:block;margin-bottom:0.5rem"></i>
+                        No company data yet. Run the scraper first.
+                    </td>
+                </tr>
+                {% endfor %}
+            </tbody>
+        </table>
+    </div>
 </div>
 
-<!-- Table -->
-<div class="card">
-  <div class="table-responsive">
-    <table class="table table-hover align-middle mb-0">
-      <thead class="border-bottom border-secondary">
-        <tr>
-          <th style="min-width:180px">Company</th>
-          <th class="text-center">Roles</th>
-          <th class="text-center">Avg Legit</th>
-          <th class="text-center">Avg Score</th>
-          <th class="text-center">Ghost %</th>
-          <th>Credibility</th>
-          <th>Sources</th>
-          <th>Last Seen</th>
-          <th></th>
-        </tr>
-      </thead>
-      <tbody>
-        {% for row in rows %}
-        {% set avg_sc  = row.avg_combined | float  if row.avg_combined  is not none else 0 %}
-        {% set avg_lg  = row.avg_legit | float     if row.avg_legit     is not none else 0 %}
-        {% set g_rate  = row.ghost_rate | int       if row.ghost_rate    is not none else 0 %}
-        <tr>
-          <td>
-            <span class="fw-medium text-white">{{ row.company }}</span>
-          </td>
-
-          <td class="text-center">
-            <span class="badge bg-primary-subtle text-primary">{{ row.cnt }}</span>
-          </td>
-
-          <!-- Avg legitimacy -->
-          <td class="text-center">
-            {% if row.avg_legit is not none %}
-            <span class="badge bg-{{ avg_lg | score_class }}-subtle text-{{ avg_lg | score_class }}">
-              {{ "%.0f" | format(avg_lg) }}
-            </span>
-            {% else %}
-            <span class="text-muted">—</span>
-            {% endif %}
-          </td>
-
-          <!-- Avg combined -->
-          <td class="text-center">
-            {% if row.avg_combined is not none %}
-            <span class="badge bg-{{ avg_sc | score_class }}-subtle text-{{ avg_sc | score_class }} fw-bold">
-              {{ "%.0f" | format(avg_sc) }}
-            </span>
-            {% else %}
-            <span class="text-muted">—</span>
-            {% endif %}
-          </td>
-
-          <!-- Ghost rate -->
-          <td class="text-center">
-            {% if g_rate > 50 %}
-            <span class="badge bg-danger">{{ g_rate }}%</span>
-            {% elif g_rate > 20 %}
-            <span class="badge bg-warning text-dark">{{ g_rate }}%</span>
-            {% else %}
-            <span class="badge bg-success-subtle text-success">{{ g_rate }}%</span>
-            {% endif %}
-          </td>
-
-          <!-- Credibility bar -->
-          <td style="min-width:120px">
-            {% if row.avg_combined is not none %}
-            <div class="progress" style="height:8px; width:100px">
-              <div class="progress-bar bg-{{ avg_sc | score_class }}"
-                   style="width:{{ avg_sc | score_pct }}%"></div>
-            </div>
-            {% else %}
-            <span class="text-muted small">Not scored</span>
-            {% endif %}
-          </td>
-
-          <!-- Sources -->
-          <td>
-            {% if row.sources %}
-            {% for src in row.sources %}
-            <span class="badge bg-dark text-muted border border-secondary" style="font-size:.7rem">{{ src }}</span>
-            {% endfor %}
-            {% endif %}
-          </td>
-
-          <!-- Last seen -->
-          <td class="text-muted small">{{ row.last_seen | relative_date if row.last_seen else '—' }}</td>
-
-          <!-- Action: filter jobs by company -->
-          <td>
-            <a href="{{ url_for('jobs', company=row.company) }}"
-               class="btn btn-sm btn-outline-secondary py-0 px-1"
-               title="View jobs from this company">
-              <i class="bi bi-table"></i>
-            </a>
-          </td>
-        </tr>
-        {% else %}
-        <tr>
-          <td colspan="9" class="text-center text-muted py-4">No company data yet.</td>
-        </tr>
-        {% endfor %}
-      </tbody>
-    </table>
-  </div>
-</div>
-
-<!-- Legend -->
-<div class="d-flex gap-3 mt-3 flex-wrap">
-  <small class="text-muted"><span class="badge bg-success-subtle text-success me-1">≥70</span>High credibility</small>
-  <small class="text-muted"><span class="badge bg-warning-subtle text-warning me-1">40-69</span>Medium</small>
-  <small class="text-muted"><span class="badge bg-danger-subtle text-danger me-1">&lt;40</span>Low / Ghost risk</small>
-  <small class="text-muted ms-auto">Ghost % = percentage of roles flagged as potential ghost jobs</small>
+<div class="text-muted mt-2" style="font-size:0.75rem">
+    <i class="bi bi-info-circle me-1"></i>
+    Ghost % = percentage of a company's listings flagged as suspected ghost jobs.
+    Red if &gt;50%, yellow if &gt;25%, green otherwise.
+    Click a company name to filter jobs.
 </div>
 
 {% endblock %}

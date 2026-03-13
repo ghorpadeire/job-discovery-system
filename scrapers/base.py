@@ -1,193 +1,115 @@
 """
-Abstract base class for all job scrapers.
-
-Each concrete scraper (IrishJobs, Indeed, etc.) subclasses BaseScraper and
-implements:
-    - build_search_url(query, page) → str
-    - parse_jobs(soup, query)       → list[dict]
-
-The base class handles:
-    - Playwright page fetching with timeout handling
-    - Page-level Redis caching (skip pages scraped today)
-    - Pagination loop with configurable max_pages
-    - Per-query debug HTML dumps
-    - Structured ScraperResult return type
+Abstract base scraper class.
+All scrapers inherit from BaseScraper and implement scrape().
 """
-import asyncio
 import logging
 from abc import ABC, abstractmethod
 from dataclasses import dataclass, field
-from typing import TYPE_CHECKING, Optional
+from datetime import datetime, timezone
+from typing import Optional
 
-from bs4 import BeautifulSoup
-from playwright.async_api import Page
-from playwright.async_api import TimeoutError as PlaywrightTimeout
+from sqlalchemy.orm import sessionmaker
 
-if TYPE_CHECKING:
-    from core.cache import NullCache, RedisCache
+from core.deduplicator import find_duplicate
+from core.models import Job
 
 logger = logging.getLogger(__name__)
 
-USER_AGENT = (
-    "Mozilla/5.0 (Windows NT 10.0; Win64; x64) "
-    "AppleWebKit/537.36 (KHTML, like Gecko) "
-    "Chrome/122.0.0.0 Safari/537.36"
-)
-
-
-# ---------------------------------------------------------------------------
-# Result container
-# ---------------------------------------------------------------------------
 
 @dataclass
 class ScraperResult:
-    source:        str
-    jobs:          list[dict] = field(default_factory=list)
-    pages_scraped: int        = 0
-    errors:        list[str]  = field(default_factory=list)
+    title:       str
+    company:     str
+    location:    str
+    salary:      str
+    date_posted: str
+    url:         str
+    description: str
+    source:      str
+    # Optional extras
+    raw_data:    dict = field(default_factory=dict)
 
-    @property
-    def job_count(self) -> int:
-        return len(self.jobs)
-
-    def __str__(self) -> str:
-        return (
-            f"[{self.source}] {self.job_count} jobs / "
-            f"{self.pages_scraped} pages / {len(self.errors)} errors"
-        )
-
-
-# ---------------------------------------------------------------------------
-# Base scraper
-# ---------------------------------------------------------------------------
 
 class BaseScraper(ABC):
-    # --- Subclasses must set these ---
-    source_name:    str       = ""
-    base_url:       str       = ""
-    search_queries: list[str] = []
-    location:       str       = "Dublin"
+    """Abstract base class for all job board scrapers."""
 
-    # --- Subclasses may override these ---
-    max_pages:     int   = 5
-    request_delay: float = 2.0      # seconds between page requests
-
-    def __init__(self, cache: "Optional[RedisCache | NullCache]" = None):
-        self.cache = cache
-
-    # ------------------------------------------------------------------
-    # Abstract interface
-    # ------------------------------------------------------------------
+    def __init__(self, name: str):
+        self.name = name
+        self.logger = logging.getLogger(f"scrapers.{name}")
 
     @abstractmethod
-    def build_search_url(self, query: str, page: int = 1) -> str:
-        """Return the full URL for the given query and page number."""
-        ...
-
-    @abstractmethod
-    def parse_jobs(self, soup: BeautifulSoup, query: str) -> list[dict]:
+    def scrape(self) -> list[ScraperResult]:
         """
-        Extract job listings from a rendered page.
-
-        Each dict must contain at minimum:
-            title, company, source
-
-        Optional keys: url, date_posted, salary, search_term
+        Fetch job listings from the source.
+        Must return a list of ScraperResult objects.
+        Must never raise — catch all exceptions internally and return partial results.
         """
         ...
 
-    def has_next_page(self, soup: BeautifulSoup, page_num: int) -> bool:
+    def save_to_db(self, results: list[ScraperResult], engine) -> tuple[int, int]:
         """
-        Return False to stop pagination early.
-        Default: always return True (pagination stops when parse_jobs returns []).
+        Upsert results into the database.
+        - New jobs: INSERT
+        - Existing jobs: update last_seen
+        Returns (new_count, duplicate_count).
         """
-        return True
+        Session = sessionmaker(bind=engine)
+        session = Session()
+        new_count = 0
+        dup_count = 0
 
-    # ------------------------------------------------------------------
-    # Orchestration (called by run_all.py)
-    # ------------------------------------------------------------------
-
-    async def run(self, page: Page, debug: bool = False) -> ScraperResult:
-        """Run all configured queries and return a ScraperResult."""
-        result = ScraperResult(source=self.source_name)
-
-        for query in self.search_queries:
-            logger.info(f"\n[{self.source_name}] '{query}' in {self.location}")
-            try:
-                jobs, pages = await self._scrape_query(page, query, debug)
-                result.jobs.extend(jobs)
-                result.pages_scraped += pages
-                logger.info(f"  → {len(jobs)} jobs across {pages} page(s)")
-            except Exception as exc:
-                msg = f"Error on query '{query}': {exc}"
-                logger.error(msg, exc_info=True)
-                result.errors.append(msg)
-
-        return result
-
-    # ------------------------------------------------------------------
-    # Internal helpers
-    # ------------------------------------------------------------------
-
-    async def _scrape_query(
-        self, page: Page, query: str, debug: bool
-    ) -> tuple[list[dict], int]:
-        jobs:       list[dict] = []
-        pages_done: int        = 0
-
-        for page_num in range(1, self.max_pages + 1):
-            url = self.build_search_url(query, page_num)
-
-            # --- Redis page cache check ---
-            if self.cache and self.cache.is_page_cached(url):
-                logger.info(f"  CACHE HIT — skipping: {url}")
-                break
-
-            html = await self._fetch(page, url)
-            if not html:
-                break
-
-            # --- Cache this page ---
-            if self.cache:
-                self.cache.cache_page(url)
-
-            # --- Optional debug dump ---
-            if debug:
-                fname = (
-                    f"debug_{self.source_name.replace('.', '_')}"
-                    f"_{query.replace(' ', '_')}_p{page_num}.html"
-                )
-                with open(fname, "w", encoding="utf-8") as fh:
-                    fh.write(html)
-                logger.info(f"  Debug HTML → {fname}")
-
-            soup     = BeautifulSoup(html, "html.parser")
-            new_jobs = self.parse_jobs(soup, query)
-            pages_done += 1
-
-            logger.info(f"  Page {page_num} → {len(new_jobs)} jobs")
-
-            if not new_jobs:
-                logger.debug("  Empty page — stopping pagination")
-                break
-
-            jobs.extend(new_jobs)
-
-            if not self.has_next_page(soup, page_num):
-                break
-
-            await asyncio.sleep(self.request_delay)
-
-        return jobs, pages_done
-
-    async def _fetch(self, page: Page, url: str) -> Optional[str]:
-        """Navigate to URL and return rendered HTML, or None on failure."""
         try:
-            logger.info(f"  GET {url}")
-            await page.goto(url, wait_until="networkidle", timeout=30_000)
-            return await page.content()
-        except PlaywrightTimeout:
-            logger.warning(f"  Timeout: {url}")
+            batch = []
+            for result in results:
+                try:
+                    existing = find_duplicate(session, result.title, result.company, result.url)
+                    if existing:
+                        # Update last_seen to signal this job is still active
+                        existing.last_seen = datetime.now(timezone.utc)
+                        existing.is_active = True
+                        dup_count += 1
+                    else:
+                        job = Job(
+                            title       = result.title[:500],
+                            company     = result.company[:300],
+                            location    = (result.location or "")[:300],
+                            salary      = (result.salary or "")[:200],
+                            date_posted = (result.date_posted or "")[:100],
+                            url         = (result.url or "")[:2000],
+                            description = result.description or "",
+                            source      = result.source[:50],
+                            is_active   = True,
+                            first_seen  = datetime.now(timezone.utc),
+                            last_seen   = datetime.now(timezone.utc),
+                        )
+                        session.add(job)
+                        batch.append(job)
+                        new_count += 1
+
+                    # Commit in batches of 50
+                    if (new_count + dup_count) % 50 == 0:
+                        session.commit()
+
+                except Exception as exc:
+                    self.logger.warning("Failed to save result %r: %s", result.url, exc)
+                    session.rollback()
+
+            session.commit()
+            self.logger.info(
+                "Saved: %d new, %d duplicates skipped", new_count, dup_count
+            )
+            return new_count, dup_count
+
         except Exception as exc:
-            logger.warning(f"  Fetch error: {exc} ({url})")
-        return None
+            session.rollback()
+            self.logger.error("save_to_db failed: %s", exc)
+            return new_count, dup_count
+        finally:
+            session.close()
+
+    def run(self, engine) -> tuple[int, int]:
+        """Scrape + save in one call. Returns (new_count, dup_count)."""
+        self.logger.info("Starting scrape: %s", self.name)
+        results = self.scrape()
+        self.logger.info("Scraped %d results from %s", len(results), self.name)
+        return self.save_to_db(results, engine)

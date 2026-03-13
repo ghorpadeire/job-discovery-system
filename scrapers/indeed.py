@@ -1,268 +1,404 @@
 """
-Indeed Ireland scraper (ie.indeed.com).
+Indeed Ireland scraper — JSON blob first, HTML fallback.
 
-Indeed is a JavaScript-heavy SPA. Two extraction strategies are tried:
+Searches multiple queries relevant to Pranav's target roles:
+  java developer, software developer, cybersecurity analyst, IT support,
+  helpdesk, systems engineer
 
-  1. Embedded JSON  — Indeed injects job data as a JSON blob inside a
-     <script> tag. This is the most reliable source and doesn't depend
-     on CSS class names (which Indeed rotates frequently).
-
-  2. HTML fallback  — Uses data-testid attributes and other stable
-     selectors as a fallback if the JSON blob is missing or changes.
-
-Pagination uses the `start` query parameter (increments of 10).
+Strategy:
+  1. Look for embedded JSON in page source (fastest, most reliable)
+  2. Fall back to HTML parsing with BeautifulSoup
 """
+import asyncio
 import json
 import logging
+import random
 import re
+import time
 from typing import Optional
-from urllib.parse import urlencode, urljoin
+from urllib.parse import quote_plus
 
-from bs4 import BeautifulSoup
-
-from scrapers.base import BaseScraper
+from scrapers.base import BaseScraper, ScraperResult
 
 logger = logging.getLogger(__name__)
 
-SOURCE = "indeed.ie"
-BASE   = "https://ie.indeed.com"
+BASE_URL = "https://ie.indeed.com"
 
-# ---------------------------------------------------------------------------
-# Selector tables (HTML fallback)
-# ---------------------------------------------------------------------------
-
-_CARD_SELECTORS = [
-    "[data-testid='slider_item']",
-    "[data-jk]",                         # data-jk holds the job key
-    "div.job_seen_beacon",
-    "div[class*='jobsearch-SerpJobCard']",
-    "li[class*='result']",
-    "td.resultContent",
+# All searches relevant to Pranav's target roles
+SEARCH_QUERIES = [
+    "java developer",
+    "software developer",
+    "cybersecurity analyst",
+    "IT support",
+    "helpdesk",
+    "systems engineer",
+    "spring boot developer",
+    "junior developer",
+    "graduate developer",
 ]
 
-_TITLE_SELECTORS = [
-    "[data-testid='job-title'] span",
-    "[data-testid='job-title']",
-    "h2[class*='jobTitle'] a span",
-    "h2[class*='jobTitle'] span",
-    "h2 a span[title]",
-    "h2 a",
-    "h2",
-]
+LOCATION = "Dublin"
+MAX_PAGES = 3  # Indeed can get aggressive with anti-bot; keep low
 
-_COMPANY_SELECTORS = [
-    "[data-testid='company-name']",
-    "span[class*='companyName']",
-    "[class*='company']",
-    "[class*='employer']",
-]
-
-_DATE_SELECTORS = [
-    "[data-testid='myJobsStateDate']",
-    "span[class*='date']",
-    "[class*='date']",
-    "span[class*='posted']",
-]
-
-_SALARY_SELECTORS = [
-    "[data-testid='attribute_snippet_testid']",
-    "[class*='estimated-salary']",
-    "[class*='salary']",
-    "[class*='compensation']",
-]
+_USER_AGENT = (
+    "Mozilla/5.0 (Windows NT 10.0; Win64; x64) "
+    "AppleWebKit/537.36 (KHTML, like Gecko) "
+    "Chrome/120.0.0.0 Safari/537.36"
+)
 
 
-# ---------------------------------------------------------------------------
-# Scraper class
-# ---------------------------------------------------------------------------
+def _build_url(query: str, location: str = LOCATION, start: int = 0) -> str:
+    return (
+        f"{BASE_URL}/jobs?q={quote_plus(query)}&l={quote_plus(location)}&start={start}"
+    )
+
 
 class IndeedScraper(BaseScraper):
-    source_name    = SOURCE
-    base_url       = BASE
-    search_queries = ["java developer", "cybersecurity analyst"]
-    location       = "Dublin, County Dublin"
-    max_pages      = 5
-    request_delay  = 2.0
+    def __init__(self):
+        super().__init__("indeed")
 
-    # Indeed shows ~15 results per page; pagination uses start=0,15,30...
-    _PAGE_SIZE = 15
+    def scrape(self) -> list[ScraperResult]:
+        try:
+            return asyncio.run(self._async_scrape())
+        except Exception as exc:
+            self.logger.error("Indeed scrape failed: %s", exc)
+            return []
 
-    # ------------------------------------------------------------------
-    # URL building
-    # ------------------------------------------------------------------
+    async def _async_scrape(self) -> list[ScraperResult]:
+        from playwright.async_api import async_playwright, TimeoutError as PWTimeout
 
-    def build_search_url(self, query: str, page: int = 1) -> str:
-        params = {
-            "q":       query,
-            "l":       self.location,
-            "sort":    "date",         # most recent first
-            "start":   (page - 1) * self._PAGE_SIZE,
-            "fromage": 30,             # posted within 30 days
-        }
-        return f"{BASE}/jobs?{urlencode(params)}"
+        results: list[ScraperResult] = []
+        seen_urls: set[str] = set()
 
-    # ------------------------------------------------------------------
-    # Pagination detection
-    # ------------------------------------------------------------------
-
-    def has_next_page(self, soup: BeautifulSoup, page_num: int) -> bool:
-        """Stop when Indeed's 'Next' button is absent."""
-        return bool(
-            soup.select_one(
-                "a[data-testid='pagination-page-next'], "
-                "a[aria-label='Next Page'], "
-                "a[aria-label='Next'], "
-                "nav[aria-label='pagination'] a:last-child"
+        async with async_playwright() as pw:
+            browser = await pw.chromium.launch(headless=True)
+            context = await browser.new_context(
+                user_agent=_USER_AGENT,
+                viewport={"width": 1280, "height": 900},
+                locale="en-IE",
+                extra_http_headers={
+                    "Accept-Language": "en-IE,en-GB;q=0.9,en-US;q=0.8,en;q=0.7",
+                },
             )
-        )
+            page = await context.new_page()
 
-    # ------------------------------------------------------------------
-    # Main parse entry point
-    # ------------------------------------------------------------------
-
-    def parse_jobs(self, soup: BeautifulSoup, query: str) -> list[dict]:
-        # Strategy 1: extract the embedded JSON blob
-        jobs = self._parse_json(soup, query)
-        if jobs:
-            logger.debug(f"  JSON extraction: {len(jobs)} jobs")
-            return jobs
-
-        # Strategy 2: HTML fallback
-        logger.debug("  JSON extraction failed — using HTML fallback")
-        return self._parse_html(soup, query)
-
-    # ------------------------------------------------------------------
-    # Strategy 1 — embedded JSON
-    # ------------------------------------------------------------------
-
-    def _parse_json(self, soup: BeautifulSoup, query: str) -> list[dict]:
-        """
-        Indeed embeds job data in a <script> tag as:
-            window.mosaic.providerData["mosaic-provider-jobcards"] = {...}
-        or similar patterns. We extract the results array from that blob.
-        """
-        for script in soup.find_all("script"):
-            text = script.string or ""
-            # Match the results array inside mosaic provider data
-            match = re.search(
-                r'"results"\s*:\s*(\[\{.*?\}\])\s*,\s*"(?:totalResults|jobCount)"',
-                text,
-                re.DOTALL,
+            # Suppress heavy resources
+            await page.route(
+                "**/*.{png,jpg,jpeg,gif,svg,woff,woff2}",
+                lambda route: route.abort(),
             )
-            if not match:
-                # Alternative pattern used in some regions
-                match = re.search(
-                    r'jobCards\s*=\s*(\[\{.*?\}\])',
-                    text,
-                    re.DOTALL,
-                )
-            if not match:
-                continue
 
-            try:
-                results = json.loads(match.group(1))
-            except json.JSONDecodeError:
-                continue
+            for query in SEARCH_QUERIES:
+                self.logger.info("Indeed: searching '%s' in %s", query, LOCATION)
 
-            jobs = []
-            for item in results:
-                title   = item.get("title")   or item.get("normalizedTitle") or ""
-                company = item.get("company") or item.get("companyName")     or "Unknown"
-                jk      = item.get("jobkey")  or item.get("jk")              or ""
-                job_url = f"{BASE}/viewjob?jk={jk}" if jk else ""
+                for page_num in range(MAX_PAGES):
+                    start = page_num * 10
+                    url = _build_url(query, LOCATION, start)
+                    try:
+                        await page.goto(url, wait_until="domcontentloaded", timeout=30000)
+                        await page.wait_for_timeout(random.randint(2000, 4000))
 
-                salary_obj = item.get("extractedSalary") or {}
-                salary = (
-                    f"{salary_obj.get('min', '')}–{salary_obj.get('max', '')} "
-                    f"{salary_obj.get('type', '')}".strip("–").strip()
-                    if salary_obj else item.get("salarySnippet", {}).get("text") or None
-                )
+                        # Accept cookie consent if shown
+                        try:
+                            await page.click(
+                                "button:has-text('Accept'), [aria-label*='consent'], "
+                                "button[id*='cookie'], button[class*='cookie']",
+                                timeout=3000,
+                            )
+                        except Exception:
+                            pass
 
-                if title:
-                    jobs.append({
-                        "title":       title,
-                        "company":     company,
-                        "date_posted": item.get("formattedRelativeTime") or "",
-                        "url":         job_url,
-                        "salary":      salary or None,
-                        "search_term": query,
-                        "source":      SOURCE,
-                    })
-            return jobs
+                        content = await page.content()
 
-        return []
+                        # Strategy 1: JSON blob
+                        json_jobs = self._extract_json_jobs(content)
+                        if json_jobs:
+                            for job in json_jobs:
+                                if job.url and job.url not in seen_urls:
+                                    seen_urls.add(job.url)
+                                    results.append(job)
+                            self.logger.debug(
+                                "  Query '%s' page %d: %d jobs (JSON)", query, page_num + 1, len(json_jobs)
+                            )
+                        else:
+                            # Strategy 2: HTML fallback
+                            html_jobs = await self._extract_html_jobs(page)
+                            for job in html_jobs:
+                                if job.url and job.url not in seen_urls:
+                                    seen_urls.add(job.url)
+                                    results.append(job)
+                            self.logger.debug(
+                                "  Query '%s' page %d: %d jobs (HTML fallback)",
+                                query, page_num + 1, len(html_jobs)
+                            )
 
-    # ------------------------------------------------------------------
-    # Strategy 2 — HTML parsing
-    # ------------------------------------------------------------------
+                        await asyncio.sleep(random.uniform(1.5, 3.0))
 
-    def _parse_html(self, soup: BeautifulSoup, query: str) -> list[dict]:
-        cards = []
-        for sel in _CARD_SELECTORS:
-            cards = soup.select(sel)
-            if cards:
-                logger.debug(f"  HTML selector matched: {sel!r} ({len(cards)} cards)")
-                break
+                    except PWTimeout:
+                        self.logger.warning("Timeout: Indeed '%s' page %d", query, page_num + 1)
+                        break
+                    except Exception as exc:
+                        self.logger.warning("Error: Indeed '%s' page %d: %s", query, page_num + 1, exc)
+                        break
 
-        jobs = []
-        for card in cards:
-            try:
-                job = self._extract_html(card, query)
-                if job:
-                    jobs.append(job)
-            except Exception as exc:
-                logger.debug(f"  Card parse error: {exc}")
-        return jobs
+            await browser.close()
 
-    def _extract_html(self, card, query: str) -> Optional[dict]:
-        title = self._text(card, _TITLE_SELECTORS)
-        if not title or len(title) < 3:
+        self.logger.info("Indeed: scraped %d unique jobs", len(results))
+        return results
+
+    def _extract_json_jobs(self, html_content: str) -> list[ScraperResult]:
+        """
+        Extract jobs from Indeed's embedded mosaic JSON data.
+        Indeed embeds job data as a JS variable in the page source.
+        """
+        results = []
+        try:
+            # Pattern 1: mosaic provider jobcards
+            patterns = [
+                r'window\.mosaic\.providerData\["mosaic-provider-jobcards"\]\s*=\s*(\{.*?\});',
+                r'"jobsInPage"\s*:\s*(\[.*?\])',
+                r'window\._initialData\s*=\s*(\{.*?"jobResults".*?\});',
+                r'"jobs"\s*:\s*(\[(?:\{[^{}]*\}(?:,\{[^{}]*\})*)\])',
+            ]
+
+            for pattern in patterns:
+                m = re.search(pattern, html_content, re.DOTALL)
+                if not m:
+                    continue
+
+                raw = m.group(1)
+                try:
+                    data = json.loads(raw)
+                except json.JSONDecodeError:
+                    continue
+
+                # Navigate to job array
+                jobs_list = None
+                if isinstance(data, list):
+                    jobs_list = data
+                elif isinstance(data, dict):
+                    # Try nested paths
+                    for path in [
+                        ["metaData", "mosaicProviderJobCardsModel", "results"],
+                        ["results"],
+                        ["jobResults", "results"],
+                        ["jobCards"],
+                    ]:
+                        obj = data
+                        for key in path:
+                            obj = obj.get(key, {}) if isinstance(obj, dict) else None
+                            if obj is None:
+                                break
+                        if isinstance(obj, list):
+                            jobs_list = obj
+                            break
+
+                if not jobs_list:
+                    continue
+
+                for job_data in jobs_list:
+                    parsed = self._parse_json_job(job_data)
+                    if parsed:
+                        results.append(parsed)
+
+                if results:
+                    break  # stop after first successful pattern
+
+        except Exception as exc:
+            logger.debug("_extract_json_jobs error: %s", exc)
+
+        return results
+
+    def _parse_json_job(self, job_data: dict) -> Optional[ScraperResult]:
+        """Parse a single job from Indeed's JSON structure."""
+        try:
+            title = (
+                job_data.get("displayTitle")
+                or job_data.get("title")
+                or job_data.get("normalizedTitle")
+                or ""
+            )
+            if not title:
+                return None
+
+            company = (
+                job_data.get("company")
+                or job_data.get("companyName")
+                or job_data.get("employer", {}).get("name", "")
+                or "Unknown"
+            )
+
+            location = (
+                job_data.get("formattedLocation")
+                or job_data.get("location")
+                or ""
+            )
+
+            # Salary from snippet
+            salary = ""
+            salary_data = job_data.get("extractedSalary") or job_data.get("salarySnippet") or {}
+            if isinstance(salary_data, dict):
+                min_s = salary_data.get("min") or ""
+                max_s = salary_data.get("max") or ""
+                currency = salary_data.get("currency", "EUR")
+                if min_s and max_s:
+                    salary = f"{currency} {min_s} – {max_s}"
+                elif min_s:
+                    salary = f"{currency} {min_s}+"
+            elif isinstance(salary_data, str):
+                salary = salary_data
+
+            date_posted = (
+                job_data.get("pubDate")
+                or job_data.get("formattedRelativeTime")
+                or job_data.get("datePosted")
+                or ""
+            )
+
+            job_key = (
+                job_data.get("jobkey")
+                or job_data.get("jobKey")
+                or job_data.get("id")
+                or ""
+            )
+
+            if job_key:
+                url = f"{BASE_URL}/viewjob?jk={job_key}"
+            else:
+                url = job_data.get("viewJobLink") or job_data.get("url") or ""
+                if url and not url.startswith("http"):
+                    url = BASE_URL + url
+
+            if not url:
+                return None
+
+            return ScraperResult(
+                title=str(title).strip(),
+                company=str(company).strip(),
+                location=str(location).strip(),
+                salary=str(salary).strip(),
+                date_posted=str(date_posted).strip(),
+                url=url,
+                description=str(job_data.get("snippet", "")).strip(),
+                source="indeed",
+            )
+
+        except Exception as exc:
+            logger.debug("_parse_json_job error: %s", exc)
             return None
 
-        # Build job URL from data-jk attribute (most reliable on Indeed)
-        jk = card.get("data-jk") or ""
-        if not jk:
-            jk_el = card.select_one("[data-jk]")
-            jk    = jk_el.get("data-jk", "") if jk_el else ""
-        job_url = f"{BASE}/viewjob?jk={jk}" if jk else ""
+    async def _extract_html_jobs(self, page) -> list[ScraperResult]:
+        """HTML fallback scraper using Playwright selectors."""
+        results = []
+        try:
+            # Indeed's HTML structure varies; try multiple selectors
+            card_selectors = [
+                "div.job_seen_beacon",
+                "div[class*='jobsearch-SerpJobCard']",
+                "li[class*='css-']",
+                "div[data-testid='job-card']",
+                "td.resultContent",
+                "[class*='resultCard']",
+            ]
 
-        # Fallback: grab href from title link
-        if not job_url:
-            href    = self._attr(card, _TITLE_SELECTORS, "href")
-            job_url = urljoin(BASE, href) if href else ""
+            cards = []
+            for sel in card_selectors:
+                cards = await page.query_selector_all(sel)
+                if cards:
+                    break
 
-        company     = self._text(card, _COMPANY_SELECTORS) or "Unknown"
-        date_posted = self._text(card, _DATE_SELECTORS) or ""
-        salary      = self._text(card, _SALARY_SELECTORS)
+            for card in cards:
+                try:
+                    # Title
+                    title = ""
+                    for t_sel in ["h2 a span", "h2 span", "[class*='jobTitle'] span", "a[id*='job']"]:
+                        el = await card.query_selector(t_sel)
+                        if el:
+                            title = (await el.inner_text()).strip()
+                            if title:
+                                break
 
-        return {
-            "title":       title,
-            "company":     company,
-            "date_posted": date_posted,
-            "url":         job_url,
-            "salary":      salary,
-            "search_term": query,
-            "source":      SOURCE,
-        }
+                    if not title:
+                        continue
 
-    # ------------------------------------------------------------------
-    # Selector helpers (same pattern as IrishJobsScraper)
-    # ------------------------------------------------------------------
+                    # Company
+                    company = ""
+                    for c_sel in [
+                        "[data-testid='company-name']",
+                        "span[class*='companyName']",
+                        "[class*='company']",
+                    ]:
+                        el = await card.query_selector(c_sel)
+                        if el:
+                            company = (await el.inner_text()).strip()
+                            if company:
+                                break
+                    company = company or "Unknown"
 
-    @staticmethod
-    def _text(el, selectors: list[str]) -> Optional[str]:
-        for sel in selectors:
-            node = el.select_one(sel)
-            if node:
-                t = node.get_text(strip=True)
-                if t:
-                    return t
-        return None
+                    # Location
+                    location = ""
+                    for l_sel in [
+                        "[data-testid='text-location']",
+                        "div[class*='companyLocation']",
+                        "[class*='location']",
+                    ]:
+                        el = await card.query_selector(l_sel)
+                        if el:
+                            location = (await el.inner_text()).strip()
+                            if location:
+                                break
 
-    @staticmethod
-    def _attr(el, selectors: list[str], attr: str) -> Optional[str]:
-        for sel in selectors:
-            node = el.select_one(sel)
-            if node and node.get(attr):
-                return node[attr]
-        return None
+                    # Salary
+                    salary = ""
+                    for s_sel in [
+                        "[class*='salary']",
+                        "[data-testid*='salary']",
+                        "div[class*='metadata'] div",
+                    ]:
+                        el = await card.query_selector(s_sel)
+                        if el:
+                            text = (await el.inner_text()).strip()
+                            if any(c in text for c in ["€", "£", "$", "per", "year", "hour", "salary"]):
+                                salary = text
+                                break
+
+                    # Date
+                    date_posted = ""
+                    for d_sel in ["[class*='date']", "span[class*='date']", "[data-testid*='date']"]:
+                        el = await card.query_selector(d_sel)
+                        if el:
+                            date_posted = (await el.inner_text()).strip()
+                            if date_posted:
+                                break
+
+                    # URL
+                    url = ""
+                    for u_sel in ["h2 a", "a[id*='job']", "a[href*='/rc/']", "a[href*='viewjob']"]:
+                        el = await card.query_selector(u_sel)
+                        if el:
+                            href = await el.get_attribute("href")
+                            if href:
+                                url = href if href.startswith("http") else BASE_URL + href
+                                break
+
+                    if not url:
+                        continue
+
+                    results.append(ScraperResult(
+                        title=title,
+                        company=company,
+                        location=location,
+                        salary=salary,
+                        date_posted=date_posted,
+                        url=url,
+                        description="",
+                        source="indeed",
+                    ))
+
+                except Exception as exc:
+                    logger.debug("HTML card parse error: %s", exc)
+
+        except Exception as exc:
+            logger.warning("_extract_html_jobs error: %s", exc)
+
+        return results

@@ -1,39 +1,44 @@
-# render.yaml -- Blueprint for one-click Render deployment
-# Docs: https://render.com/docs/blueprint-spec
-#
-# To deploy the Telegram bot as a Background Worker on Render:
-#   dashboard.render.com -> New -> Background Worker -> Connect repo
-#   -> Runtime: Python -> Build: pip install -r requirements-notify.txt
-#   -> Start: python telegram_bot.py
-#   -> Add env vars: DATABASE_URL, REDIS_URL, TELEGRAM_BOT_TOKEN, TELEGRAM_CHAT_ID
-
 services:
+  # ── Free web service: Flask dashboard + Telegram webhook ────────
   - type: web
     name: job-web
-    runtime: python
+    env: python
+    plan: free
     buildCommand: pip install -r requirements-web.txt
     startCommand: gunicorn dashboard:app --bind 0.0.0.0:$PORT --workers 1 --timeout 120
+    healthCheckPath: /
     envVars:
       - key: DATABASE_URL
         sync: false
       - key: REDIS_URL
-        sync: false
-      - key: OPENAI_API_KEY
-        sync: false
-
-  - type: worker
-    name: job-bot
-    runtime: python
-    buildCommand: pip install -r requirements.txt
-    startCommand: python telegram_bot.py
-    envVars:
-      - key: DATABASE_URL
-        sync: false
-      - key: REDIS_URL
-        sync: false
-      - key: OPENAI_API_KEY
         sync: false
       - key: TELEGRAM_BOT_TOKEN
         sync: false
       - key: TELEGRAM_CHAT_ID
         sync: false
+      - key: OPENAI_API_KEY
+        sync: false
+      - key: FLASK_SECRET
+        generateValue: true
+
+  # ── Paid background worker ($7/month) — NOT deployed by default ─
+  # Uncomment below only if you want 24/7 persistent Telegram polling.
+  # The free GitHub Actions + webhook approach is recommended instead.
+  #
+  # - type: worker
+  #   name: job-bot
+  #   env: python
+  #   plan: starter
+  #   buildCommand: pip install -r requirements.txt
+  #   startCommand: python telegram_bot.py
+  #   envVars:
+  #     - key: DATABASE_URL
+  #       sync: false
+  #     - key: REDIS_URL
+  #       sync: false
+  #     - key: TELEGRAM_BOT_TOKEN
+  #       sync: false
+  #     - key: TELEGRAM_CHAT_ID
+  #       sync: false
+  #     - key: OPENAI_API_KEY
+  #       sync: false
