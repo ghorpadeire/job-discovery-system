@@ -9,7 +9,7 @@ from dotenv import load_dotenv
 from sqlalchemy import create_engine, text
 from sqlalchemy.exc import OperationalError
 
-from core.models import Base, migrate_scoring_columns, migrate_tracker_table
+from core.models import Base, migrate_tracker_table  # noqa: F401
 
 load_dotenv()
 logger = logging.getLogger(__name__)

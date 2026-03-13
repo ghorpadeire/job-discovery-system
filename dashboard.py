@@ -18,8 +18,8 @@ import json
 import logging
 import os
 import urllib.request
-from datetime import datetime, timezone, timedelta
-from functools import lru_cache
+from datetime import datetime, timezone  # noqa: F401
+from functools import lru_cache  # noqa: F401
 
 from dotenv import load_dotenv
 from flask import Flask, render_template, request, jsonify, abort

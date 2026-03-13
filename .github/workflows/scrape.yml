@@ -29,7 +29,15 @@ jobs:
         run: pip install -r requirements.txt
 
       - name: Install Playwright Chromium
-        run: playwright install chromium --with-deps
+        run: |
+          # Ubuntu 24 (Noble) renamed libasound2 → libasound2t64; use --no-deps
+          # and install the renamed package manually
+          sudo apt-get update -qq
+          sudo apt-get install -y --no-install-recommends \
+            libasound2t64 libgbm1 libnss3 libxss1 libatk-bridge2.0-0 \
+            libgtk-3-0 libxcomposite1 libxdamage1 libxrandr2 \
+            libpango-1.0-0 libcairo2 libatspi2.0-0
+          playwright install chromium --no-deps
 
       - name: Scrape IrishJobs + Indeed
         run: python run_all.py
