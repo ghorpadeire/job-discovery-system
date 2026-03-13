@@ -82,6 +82,18 @@ def main() -> int:
         except Exception as exc:
             logger.error("Indeed scraper failed: %s", exc)
 
+    if not args.no_remoteok:
+        _banner("RemoteOK API Scraper")
+        try:
+            from scrapers.remoteok import RemoteOKScraper
+            scraper = RemoteOKScraper()
+            new, dups = scraper.run(engine)
+            total_new += new
+            total_dups += dups
+            logger.info("RemoteOK: +%d new | %d duplicates", new, dups)
+        except Exception as exc:
+            logger.error("RemoteOK scraper failed: %s", exc)
+
     # ── Summary ──────────────────────────────────────────────────────
     elapsed = time.time() - start_time
     _banner("Scraping Summary")
