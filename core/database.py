@@ -42,11 +42,43 @@ def get_engine(database_url: str | None = None):
     return _engine
 
 
+# All columns that must exist on the jobs table (covers old DBs missing base cols)
+_ALL_JOB_COLUMNS = [
+    ("location",         "VARCHAR(300)"),
+    ("salary",           "VARCHAR(200)"),
+    ("date_posted",      "VARCHAR(100)"),
+    ("description",      "TEXT"),
+    ("source",           "VARCHAR(50)"),
+    ("is_active",        "BOOLEAN DEFAULT TRUE"),
+    ("first_seen",       "TIMESTAMP DEFAULT now()"),
+    ("last_seen",        "TIMESTAMP DEFAULT now()"),
+    ("legitimacy_score", "INTEGER"),
+    ("score_breakdown",  "JSONB"),
+    ("suspected_ghost",  "BOOLEAN DEFAULT FALSE"),
+    ("tg_alerted",       "BOOLEAN DEFAULT FALSE"),
+    ("ai_reasoning",     "TEXT"),
+]
+
+
 def _bootstrap(engine) -> None:
-    """Create all tables and run idempotent migrations."""
+    """Create all tables and run idempotent migrations — works on fresh and existing DBs."""
     try:
+        from sqlalchemy import inspect, text as _text
+        # Create tables if they don't exist at all
         Base.metadata.create_all(engine)
-        migrate_scoring_columns(engine)
+
+        # Ensure every column exists on jobs table (handles old schema)
+        inspector = inspect(engine)
+        if "jobs" in inspector.get_table_names():
+            existing = {col["name"] for col in inspector.get_columns("jobs")}
+            with engine.begin() as conn:
+                for col_name, col_def in _ALL_JOB_COLUMNS:
+                    if col_name not in existing:
+                        conn.execute(_text(
+                            f"ALTER TABLE jobs ADD COLUMN IF NOT EXISTS {col_name} {col_def}"
+                        ))
+                        logger.info("Migration: added jobs.%s", col_name)
+
         migrate_tracker_table(engine)
         logger.info("Database bootstrap complete")
     except Exception as exc:
