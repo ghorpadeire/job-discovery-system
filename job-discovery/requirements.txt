@@ -1,0 +1,13 @@
+# Full dependencies — for local dev and Render deployment
+playwright==1.42.0
+sqlalchemy==2.0.28
+psycopg2-binary==2.9.9
+redis==5.0.3
+python-dotenv==1.0.1
+flask==3.0.2
+gunicorn==21.2.0
+httpx==0.27.0
+python-dateutil==2.9.0
+python-telegram-bot==21.1.1
+openai==1.14.3
+beautifulsoup4==4.12.3

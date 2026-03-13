@@ -1,12 +1,7 @@
-# Lightweight deps for tg_notify.py (no Playwright, no Flask)
-# Used by .github/workflows/telegram.yml to keep CI fast (~10s install)
-
-# Database
+# Lightweight — GitHub Actions only (no Playwright, no Flask)
+# Installs in under 30 seconds on ubuntu-latest
 sqlalchemy>=2.0.0
 psycopg2-binary>=2.9.9
-
-# Config
 python-dotenv>=1.0.0
-
-# Telegram
 python-telegram-bot>=22.0
+python-dateutil>=2.9.0

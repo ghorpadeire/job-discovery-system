@@ -24,9 +24,8 @@ logging.basicConfig(
 )
 logger = logging.getLogger("tg_notify")
 
-DIGEST_MIN_SCORE = 50   # Daily digest: score ≥ 50
-ALERT_MIN_SCORE  = 40   # Instant alerts: score ≥ 40 (catches most real jobs)
-ALERT_BATCH_SIZE = 15   # Max jobs per alert run (avoid Telegram flood)
+DIGEST_MIN_SCORE = 70
+ALERT_MIN_SCORE  = 85
 
 
 # ─────────────────────────────────────────────
@@ -99,9 +98,7 @@ def _digest_jobs():
 
 
 def _unalerted_jobs():
-    """Return jobs scored ≥ ALERT_MIN_SCORE that have not been Telegram-alerted yet.
-    Ordered by score descending, capped at ALERT_BATCH_SIZE to avoid flooding.
-    """
+    """Return jobs scored ≥ 85 that have not been Telegram-alerted yet."""
     from sqlalchemy.orm import sessionmaker
     from core.models import Job
 
@@ -114,11 +111,9 @@ def _unalerted_jobs():
             .filter(
                 Job.is_active == True,
                 Job.legitimacy_score >= ALERT_MIN_SCORE,
-                Job.suspected_ghost == False,
                 Job.tg_alerted == False,
             )
             .order_by(Job.legitimacy_score.desc())
-            .limit(ALERT_BATCH_SIZE)
             .all()
         )
     finally:
@@ -178,17 +173,6 @@ async def run_digest(bot, chat_id: str) -> int:
     jobs = _digest_jobs()
     if not jobs:
         logger.info("Digest: no jobs found with score ≥ %d in last 24h", DIGEST_MIN_SCORE)
-        now_str = datetime.now(timezone.utc).strftime("%a %d %b %Y %H:%M UTC")
-        await bot.send_message(
-            chat_id=int(chat_id),
-            text=(
-                f"📋 <b>Daily Digest — {now_str}</b>\n\n"
-                "😴 <b>No new quality jobs found</b> in the last 24 hours.\n"
-                "The scrapers ran but nothing passed the quality filter.\n\n"
-                "<i>Next scrape: 07:00 or 19:00 UTC</i>"
-            ),
-            parse_mode="HTML",
-        )
         return 0
 
     now_str = datetime.now(timezone.utc).strftime("%a %d %b %Y")
@@ -223,72 +207,39 @@ async def run_digest(bot, chat_id: str) -> int:
 #  Alerts mode
 # ─────────────────────────────────────────────
 
-def _score_emoji(score: int) -> str:
-    if score >= 85: return "🟢"
-    if score >= 70: return "🟡"
-    if score >= 50: return "🔵"
-    return "🔴"
-
-
 async def run_alerts(bot, chat_id: str) -> int:
-    """Send individual alerts for every unnotified job above the threshold."""
+    """Send individual alerts for unnotified high-confidence jobs."""
     jobs = _unalerted_jobs()
     if not jobs:
-        logger.info("Alerts: no new unalerted jobs with score ≥ %d", ALERT_MIN_SCORE)
-        now_str = datetime.now(timezone.utc).strftime("%H:%M UTC")
-        await bot.send_message(
-            chat_id=int(chat_id),
-            text=(
-                f"⏰ <b>30-min check — {now_str}</b>\n\n"
-                "😔 <b>No new jobs</b> this cycle.\n"
-                "<i>Checking again in 30 minutes.</i>"
-            ),
-            parse_mode="HTML",
-        )
+        logger.info("Alerts: no new jobs with score ≥ %d", ALERT_MIN_SCORE)
         return 0
 
-    # Send a summary header first if more than 3 jobs
-    if len(jobs) >= 3:
-        header = (
-            f"📬 <b>{len(jobs)} new job{'s' if len(jobs)>1 else ''} found!</b>\n"
-            f"Sending individual alerts now..."
-        )
-        await _send_message(bot, chat_id, header)
-
-    import asyncio
     sent_ids = []
     for job in jobs:
         score = job.legitimacy_score or 0
-        emoji = _score_emoji(score)
-        sal  = f"\n💰 <b>Salary:</b> {job.salary}" if job.salary else ""
-        loc  = f"\n📍 <b>Location:</b> {job.location}" if job.location else ""
-        date = f"\n📅 <b>Posted:</b> {job.date_posted}" if job.date_posted else ""
-        src  = f"\n📌 <b>Source:</b> {(job.source or '').upper()}"
+        sal = f"\n💰 {job.salary}" if job.salary else ""
+        loc = f"\n📍 {job.location}" if job.location else ""
+        date = f"\n📅 {job.date_posted}" if job.date_posted else ""
 
         breakdown = job.score_breakdown or {}
-        signals_hit  = [k.replace('_',' ') for k, v in breakdown.items() if v > 0]
-        signals_miss = [k.replace('_',' ') for k, v in breakdown.items() if v == 0]
-        sig_str = ""
-        if signals_hit:
-            sig_str += "\n✅ " + "  ✅ ".join(signals_hit)
-        if signals_miss:
-            sig_str += "\n❌ " + "  ❌ ".join(signals_miss)
+        signals_hit = [k for k, v in breakdown.items() if v > 0]
+        signals_str = " · ".join(signals_hit) if signals_hit else "no breakdown"
 
         msg = (
-            f"{emoji} <b>[{score}/100] {job.title}</b>\n"
-            f"🏢 <b>{job.company}</b>{loc}{sal}{date}{src}\n"
-            f"{sig_str}\n\n"
-            f"🔗 <a href='{job.url}'>Apply Now</a>"
+            f"🚨 <b>NEW JOB ALERT</b> — Score: {score}/100\n\n"
+            f"<b>{job.title}</b>\n"
+            f"🏢 {job.company}{loc}{sal}{date}\n\n"
+            f"✅ Signals: {signals_str}\n\n"
+            f"🔗 <a href='{job.url}'>{job.url}</a>"
         )
 
         ok = await _send_message(bot, chat_id, msg)
         if ok:
             sent_ids.append(job.id)
-        await asyncio.sleep(0.4)  # avoid Telegram rate limit
 
     if sent_ids:
         _mark_alerted(sent_ids)
-        logger.info("Alerts sent: %d jobs", len(sent_ids))
+        logger.info("Alerts sent: %d new high-confidence jobs", len(sent_ids))
 
     return len(sent_ids)
 
@@ -329,44 +280,12 @@ async def main_async(mode: str) -> int:
     return 0
 
 
-def _reset_all_alerts() -> int:
-    """Mark all jobs as tg_alerted=False so they will be re-sent."""
-    from sqlalchemy.orm import sessionmaker
-    from core.models import Job
-    engine = _get_engine()
-    Session = sessionmaker(bind=engine)
-    session = Session()
-    try:
-        count = session.query(Job).filter(Job.tg_alerted == True).update(
-            {"tg_alerted": False}, synchronize_session=False
-        )
-        session.commit()
-        logger.info("Reset tg_alerted on %d jobs — all will be re-alerted", count)
-        return count
-    except Exception as exc:
-        session.rollback()
-        logger.error("Reset failed: %s", exc)
-        return 0
-    finally:
-        session.close()
-
-
 def main() -> int:
-    parser = argparse.ArgumentParser(description="Telegram notifier for JobScout")
+    parser = argparse.ArgumentParser(description="One-shot Telegram notifier")
     group = parser.add_mutually_exclusive_group(required=True)
-    group.add_argument("--digest",       action="store_true", help="Send daily digest (score ≥ 50)")
-    group.add_argument("--alerts",       action="store_true", help="Send alerts for new unnotified jobs")
-    group.add_argument("--reset-alerts", action="store_true", help="Unmark all jobs so they get re-sent")
+    group.add_argument("--digest", action="store_true", help="Send daily digest")
+    group.add_argument("--alerts", action="store_true", help="Send instant alerts for ≥85 jobs")
     args = parser.parse_args()
-
-    if args.reset_alerts:
-        from core.database import check_connection
-        if not check_connection():
-            logger.error("Cannot connect to database")
-            return 1
-        count = _reset_all_alerts()
-        print(f"Reset {count} jobs — run --alerts now to send them all")
-        return 0
 
     mode = "digest" if args.digest else "alerts"
     return asyncio.run(main_async(mode))

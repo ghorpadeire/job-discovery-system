@@ -1,144 +1,44 @@
-# ─────────────────────────────────────────────────────────────────────────────
-# Job Discovery System — Docker Compose
-#
-# Services:
-#   postgres  — PostgreSQL 15 database (persistent volume)
-#   redis     — Redis 7 cache (persistent volume)
-#   scraper   — Playwright scraper, runs every 12 h via APScheduler
-#   scorer    — Legitimacy + AI scorer, triggered via Redis pub/sub
-#   web       — Flask dashboard on port 5000
-#
-# Quick start:
-#   cp .env.example .env   # fill in API keys
-#   docker compose up -d
-#   docker compose logs -f scraper
-# ─────────────────────────────────────────────────────────────────────────────
-
-x-python-env: &python-env
-  DATABASE_URL:            postgresql://${POSTGRES_USER:-jobsuser}:${POSTGRES_PASSWORD:-jobspass}@postgres:5432/${POSTGRES_DB:-jobsdb}
-  REDIS_URL:               redis://redis:6379/0
-  OPENAI_API_KEY:          ${OPENAI_API_KEY:-}
-  TELEGRAM_BOT_TOKEN:      ${TELEGRAM_BOT_TOKEN:-}
-  TELEGRAM_CHAT_ID:        ${TELEGRAM_CHAT_ID:-}
-  TG_DIGEST_MIN_SCORE:     ${TG_DIGEST_MIN_SCORE:-70}
-  TG_ALERT_MIN_SCORE:      ${TG_ALERT_MIN_SCORE:-85}
-  TG_ALERT_POLL_MINS:      ${TG_ALERT_POLL_MINS:-5}
-  PYTHONUNBUFFERED:        "1"
-  PYTHONDONTWRITEBYTECODE: "1"
-
-x-python-base: &python-base
-  build:
-    context: .
-    dockerfile: Dockerfile
-  restart: unless-stopped
-  environment:
-    <<: *python-env
-  volumes:
-    - app_logs:/app/logs
+version: '3.8'
 
 services:
-
-  # ── Infrastructure ──────────────────────────────────────────────────────────
-
-  postgres:
-    image: postgres:15-alpine
-    container_name: jobsdb
-    restart: unless-stopped
+  web:
+    build: .
+    ports:
+      - "5000:5000"
     environment:
-      POSTGRES_DB:       ${POSTGRES_DB:-jobsdb}
-      POSTGRES_USER:     ${POSTGRES_USER:-jobsuser}
-      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-jobspass}
+      - DATABASE_URL=postgresql://jobsuser:jobspass@db:5432/jobsdb
+      - REDIS_URL=redis://redis:6379/0
+    depends_on:
+      db:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+
+  db:
+    image: postgres:16
+    environment:
+      POSTGRES_USER:     jobsuser
+      POSTGRES_PASSWORD: jobspass
+      POSTGRES_DB:       jobsdb
     ports:
       - "5432:5432"
     volumes:
-      - postgres_data:/var/lib/postgresql/data
-      - ./init.sql:/docker-entrypoint-initdb.d/init.sql:ro
+      - pgdata:/var/lib/postgresql/data
     healthcheck:
-      test: ["CMD-SHELL", "pg_isready -U ${POSTGRES_USER:-jobsuser} -d ${POSTGRES_DB:-jobsdb}"]
+      test: ["CMD-SHELL", "pg_isready -U jobsuser"]
       interval: 5s
       timeout: 5s
       retries: 10
-      start_period: 10s
 
   redis:
     image: redis:7-alpine
-    container_name: jobscache
-    restart: unless-stopped
-    command: redis-server --save 60 1 --loglevel warning
     ports:
       - "6379:6379"
-    volumes:
-      - redis_data:/data
     healthcheck:
       test: ["CMD", "redis-cli", "ping"]
       interval: 5s
-      timeout: 3s
-      retries: 10
-      start_period: 5s
-
-  # ── Application services ────────────────────────────────────────────────────
-
-  scraper:
-    <<: *python-base
-    container_name: job-scraper
-    command: python services/scraper_loop.py
-    environment:
-      <<: *python-env
-      SCRAPE_INTERVAL_HOURS: ${SCRAPE_INTERVAL_HOURS:-12}
-      SCRAPE_SOURCES:        ${SCRAPE_SOURCES:-all}
-    depends_on:
-      postgres:
-        condition: service_healthy
-      redis:
-        condition: service_healthy
-    healthcheck:
-      test: ["CMD-SHELL", "test -f /tmp/scraper.heartbeat"]
-      interval: 60s
-      timeout: 10s
-      retries: 3
-      start_period: 90s
-
-  scorer:
-    <<: *python-base
-    container_name: job-scorer
-    command: python services/scorer_loop.py
-    environment:
-      <<: *python-env
-      SCORER_FALLBACK_HOURS: ${SCORER_FALLBACK_HOURS:-6}
-      AI_SCORE_ENABLED:      ${AI_SCORE_ENABLED:-false}
-    depends_on:
-      postgres:
-        condition: service_healthy
-      redis:
-        condition: service_healthy
-
-  web:
-    <<: *python-base
-    container_name: job-dashboard
-    command: python dashboard.py
-    ports:
-      - "${DASHBOARD_PORT:-5000}:5000"
-    environment:
-      <<: *python-env
-      FLASK_ENV: ${FLASK_ENV:-production}
-    depends_on:
-      postgres:
-        condition: service_healthy
-      redis:
-        condition: service_healthy
-    healthcheck:
-      test: ["CMD-SHELL", "curl -f http://localhost:5000/ || exit 1"]
-      interval: 15s
       timeout: 5s
       retries: 5
-      start_period: 20s
-
-# ── Volumes ──────────────────────────────────────────────────────────────────
 
 volumes:
-  postgres_data:
-    driver: local
-  redis_data:
-    driver: local
-  app_logs:
-    driver: local
+  pgdata:

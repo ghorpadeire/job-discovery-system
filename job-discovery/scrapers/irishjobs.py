@@ -54,25 +54,11 @@ class IrishJobsScraper(BaseScraper):
         seen_urls: set[str] = set()
 
         async with async_playwright() as pw:
-            browser = await pw.chromium.launch(
-                headless=True,
-                args=[
-                    "--disable-blink-features=AutomationControlled",
-                    "--disable-http2",           # avoid ERR_HTTP2_PROTOCOL_ERROR
-                    "--no-sandbox",
-                    "--disable-setuid-sandbox",
-                    "--disable-dev-shm-usage",
-                    "--disable-gpu",
-                ],
-            )
+            browser = await pw.chromium.launch(headless=True)
             context = await browser.new_context(
                 user_agent=_USER_AGENT,
                 viewport={"width": 1280, "height": 800},
                 locale="en-IE",
-                extra_http_headers={
-                    "Accept-Language": "en-IE,en;q=0.9",
-                    "Accept": "text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8",
-                },
             )
             page = await context.new_page()
 
