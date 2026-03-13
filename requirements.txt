@@ -1,34 +1,30 @@
-# Web scraping
-playwright>=1.42.0
-beautifulsoup4>=4.12.0
-lxml>=5.0.0
+# ── Web framework ─────────────────────────────────────────────────────────────
+Flask==3.1.3
+Werkzeug==3.1.6
+gunicorn==25.1.0
 
-# HTTP (URL resolution checks)
-httpx[async]>=0.27.0
+# ── Database ──────────────────────────────────────────────────────────────────
+SQLAlchemy==2.0.48
+psycopg2-binary==2.9.11
 
-# Database
-sqlalchemy>=2.0.0
-psycopg2-binary>=2.9.9       # PostgreSQL driver
+# ── Cache / pub-sub ───────────────────────────────────────────────────────────
+redis==7.3.0
 
-# Cache
-redis>=5.0.0
+# ── Scraping ──────────────────────────────────────────────────────────────────
+playwright==1.52.0
+beautifulsoup4==4.13.4
+lxml==5.4.0
+httpx==0.28.1
 
-# Config
-python-dotenv>=1.0.0
+# ── AI ────────────────────────────────────────────────────────────────────────
+openai==2.26.0
 
-# Date parsing
-python-dateutil>=2.9.0
+# ── Scheduling & notifications ────────────────────────────────────────────────
+APScheduler==3.11.2
+python-telegram-bot==22.6
 
-# AI layer (Phase 4)
-openai>=1.30.0
-numpy>=1.26.0
-
-# Scheduler (services/ loop processes)
-APScheduler>=3.10.0
-
-# Web dashboard (Phase 6)
-flask>=3.0.0
-gunicorn>=21.0.0
-
-# Telegram bot (Phase 5)
-python-telegram-bot[job-queue]>=22.0
+# ── Utilities ─────────────────────────────────────────────────────────────────
+python-dotenv==1.2.2
+python-dateutil==2.9.0.post0
+pyngrok==7.5.1
+requests==2.32.3

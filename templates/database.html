@@ -1,0 +1,360 @@
+{% extends "base.html" %}
+{% block title %}Database{% endblock %}
+
+{% block head %}
+<style>
+  /* ── Month chart bar ─────────────────────────────────────────── */
+  .month-bar-wrap {
+    display: flex;
+    align-items: flex-end;
+    gap: 4px;
+    height: 80px;
+  }
+  .month-bar-col {
+    flex: 1;
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    gap: 3px;
+    cursor: default;
+  }
+  .month-bar-inner {
+    width: 100%;
+    background: var(--accent);
+    opacity: .75;
+    border-radius: 3px 3px 0 0;
+    transition: opacity .15s;
+    min-height: 2px;
+  }
+  .month-bar-col:hover .month-bar-inner { opacity: 1; }
+  .month-bar-lbl {
+    font-size: .6rem;
+    color: rgba(255,255,255,.35);
+    white-space: nowrap;
+    writing-mode: vertical-lr;
+    text-orientation: mixed;
+    transform: rotate(180deg);
+    max-height: 44px;
+    overflow: hidden;
+  }
+  .month-bar-cnt {
+    font-size: .65rem;
+    color: rgba(255,255,255,.5);
+  }
+
+  /* ── Tab panels ─────────────────────────────────────────────── */
+  .db-tab-panel { display: none; }
+  .db-tab-panel.active { display: block; }
+
+  /* ── Filter panel (reuse base style) ────────────────────────── */
+  .db-filter {
+    background: #15152b;
+    border: 1px solid rgba(255,255,255,0.07);
+    border-radius: .6rem;
+    padding: .75rem 1rem;
+    margin-bottom: 1rem;
+    display: flex;
+    flex-wrap: wrap;
+    gap: .5rem;
+    align-items: center;
+  }
+  .db-filter input, .db-filter select {
+    background: #1a1a2e;
+    border-color: rgba(255,255,255,0.12);
+    color: #fff;
+    font-size: .82rem;
+  }
+  .db-filter input::placeholder { color: rgba(255,255,255,.35); }
+  .db-filter input:focus, .db-filter select:focus {
+    background: #1e1e3a;
+    border-color: var(--accent);
+    color: #fff;
+    box-shadow: none;
+  }
+  .db-filter select option { background: #1a1a2e; }
+
+  /* ── Source badge ───────────────────────────────────────────── */
+  .src-badge {
+    font-size: .68rem;
+    padding: .15em .45em;
+    border-radius: .25rem;
+    background: rgba(255,255,255,0.08);
+    color: rgba(255,255,255,.7);
+    white-space: nowrap;
+  }
+</style>
+{% endblock %}
+
+{% block content %}
+<div class="d-flex align-items-center justify-content-between mb-3">
+  <div>
+    <h4 class="mb-0 fw-bold"><i class="bi bi-database text-primary me-2"></i>Database</h4>
+    <small class="text-muted">All-time history of every job &amp; company ever scraped</small>
+  </div>
+</div>
+
+<!-- ── Stat cards ──────────────────────────────────────────────────────── -->
+<div class="row g-3 mb-4">
+  <div class="col-6 col-md-3">
+    <div class="card card-stat p-3 text-center">
+      <div class="stat-number text-info">{{ total_ever | default(0) }}</div>
+      <div class="stat-label">Total Jobs Ever</div>
+    </div>
+  </div>
+  <div class="col-6 col-md-3">
+    <div class="card card-stat p-3 text-center">
+      <div class="stat-number text-success">{{ total_active | default(0) }}</div>
+      <div class="stat-label">Active</div>
+    </div>
+  </div>
+  <div class="col-6 col-md-3">
+    <div class="card card-stat p-3 text-center">
+      <div class="stat-number text-secondary">{{ total_inactive | default(0) }}</div>
+      <div class="stat-label">Expired / Inactive</div>
+    </div>
+  </div>
+  <div class="col-6 col-md-3">
+    <div class="card card-stat p-3 text-center">
+      <div class="stat-number text-warning">{{ total_companies | default(0) }}</div>
+      <div class="stat-label">Unique Companies</div>
+    </div>
+  </div>
+</div>
+
+<!-- ── Monthly ingestion chart ─────────────────────────────────────────── -->
+{% if monthly_rows %}
+<div class="card mb-4 p-3">
+  <div class="d-flex align-items-center justify-content-between mb-3">
+    <div class="fw-semibold">Jobs Scraped Per Month</div>
+    <small class="text-muted">Last 12 months</small>
+  </div>
+  {# Find max count via namespace loop (Row objects don't support map(attribute=N)) #}
+  {% set ns = namespace(max_cnt=1) %}
+  {% for row in monthly_rows %}
+    {% if row[1] > ns.max_cnt %}{% set ns.max_cnt = row[1] %}{% endif %}
+  {% endfor %}
+  <div class="month-bar-wrap">
+    {% for row in monthly_rows %}
+    {% set pct = ((row[1] / ns.max_cnt) * 100) | int if ns.max_cnt > 0 else 2 %}
+    <div class="month-bar-col" title="{{ row[0] }}: {{ row[1] }} jobs">
+      <div class="month-bar-cnt">{{ row[1] }}</div>
+      <div class="month-bar-inner" style="height: {{ [pct, 2] | max }}%"></div>
+      <div class="month-bar-lbl">{{ row[0] }}</div>
+    </div>
+    {% endfor %}
+  </div>
+</div>
+{% endif %}
+
+<!-- ── Per-source summary ───────────────────────────────────────────────── -->
+{% if source_rows %}
+<div class="card mb-4 p-3">
+  <div class="fw-semibold mb-3">All-Time Breakdown by Source</div>
+  <div class="table-responsive">
+    <table class="table table-dark table-sm table-hover align-middle mb-0">
+      <thead>
+        <tr>
+          <th>Source</th>
+          <th class="text-end">Total</th>
+          <th class="text-end">Active</th>
+          <th class="text-end">Inactive</th>
+          <th class="text-end">Avg Score</th>
+          <th>First Seen</th>
+          <th>Last Seen</th>
+        </tr>
+      </thead>
+      <tbody>
+        {% for row in source_rows %}
+        <tr>
+          <td><span class="src-badge">{{ row.source }}</span></td>
+          <td class="text-end fw-semibold">{{ row.total }}</td>
+          <td class="text-end text-success">{{ row.active }}</td>
+          <td class="text-end text-secondary">{{ row.inactive }}</td>
+          <td class="text-end">
+            {% if row.avg_score %}
+              <span class="badge bg-{{ row.avg_score | score_class }}">{{ row.avg_score }}</span>
+            {% else %}
+              <span class="text-muted">—</span>
+            {% endif %}
+          </td>
+          <td class="text-muted" style="font-size:.8rem">
+            {% if row.first_seen %}{{ row.first_seen.strftime('%d %b %Y') }}{% else %}—{% endif %}
+          </td>
+          <td class="text-muted" style="font-size:.8rem">
+            {% if row.last_seen %}{{ row.last_seen | relative_date }}{% else %}—{% endif %}
+          </td>
+        </tr>
+        {% endfor %}
+      </tbody>
+    </table>
+  </div>
+</div>
+{% endif %}
+
+<!-- ── Tabs: All Jobs / All Companies ─────────────────────────────────── -->
+<div class="d-flex align-items-center gap-2 mb-3">
+  <button class="btn btn-sm btn-primary" id="tab-jobs-btn" onclick="showTab('jobs')">
+    <i class="bi bi-briefcase me-1"></i>All Jobs
+  </button>
+  <button class="btn btn-sm btn-outline-secondary" id="tab-companies-btn" onclick="showTab('companies')">
+    <i class="bi bi-building me-1"></i>All Companies
+  </button>
+</div>
+
+<!-- ── Jobs panel ─────────────────────────────────────────────────────── -->
+<div id="tab-jobs" class="db-tab-panel active">
+  <div class="db-filter">
+    <input type="text"   id="db-q"       class="form-control form-control-sm" style="max-width:200px" placeholder="Search title / company…">
+    <input type="text"   id="db-company" class="form-control form-control-sm" style="max-width:160px" placeholder="Company…">
+    <select id="db-source" class="form-select form-select-sm" style="max-width:140px">
+      <option value="">All Sources</option>
+    </select>
+    <select id="db-status" class="form-select form-select-sm" style="max-width:130px">
+      <option value="all">All Status</option>
+      <option value="active">Active</option>
+      <option value="inactive">Inactive</option>
+    </select>
+    <select id="db-days" class="form-select form-select-sm" style="max-width:130px">
+      <option value="">Any Date</option>
+      <option value="7">Last 7 days</option>
+      <option value="30">Last 30 days</option>
+      <option value="90">Last 90 days</option>
+    </select>
+    <button class="btn btn-sm btn-primary" onclick="loadJobs()">
+      <i class="bi bi-search me-1"></i>Filter
+    </button>
+    <button class="btn btn-sm btn-outline-secondary" onclick="resetJobFilters()">Reset</button>
+  </div>
+  <div id="db-jobs-partial">
+    <div class="text-muted text-center py-4">
+      <div class="spinner-border spinner-border-sm text-secondary me-2"></div>Loading…
+    </div>
+  </div>
+</div>
+
+<!-- ── Companies panel ────────────────────────────────────────────────── -->
+<div id="tab-companies" class="db-tab-panel">
+  <div class="db-filter">
+    <input type="text" id="db-co-q" class="form-control form-control-sm" style="max-width:220px" placeholder="Search company…">
+    <select id="db-co-sort" class="form-select form-select-sm" style="max-width:160px">
+      <option value="total">Sort: Total Jobs</option>
+      <option value="active">Sort: Active</option>
+      <option value="avg_score">Sort: Avg Score</option>
+      <option value="first_seen">Sort: First Seen</option>
+      <option value="last_seen">Sort: Last Seen</option>
+      <option value="company">Sort: Name A-Z</option>
+    </select>
+    <button class="btn btn-sm btn-primary" onclick="loadCompanies()">
+      <i class="bi bi-search me-1"></i>Filter
+    </button>
+    <button class="btn btn-sm btn-outline-secondary" onclick="resetCompanyFilters()">Reset</button>
+  </div>
+  <div id="db-companies-partial">
+    <div class="text-muted text-center py-4">
+      <div class="spinner-border spinner-border-sm text-secondary me-2"></div>Loading…
+    </div>
+  </div>
+</div>
+{% endblock %}
+
+{% block scripts %}
+<script>
+// ── Tab switching ─────────────────────────────────────────────────────────────
+function showTab(name) {
+  ['jobs','companies'].forEach(t => {
+    document.getElementById('tab-'+t).classList.toggle('active', t === name);
+    const btn = document.getElementById('tab-'+t+'-btn');
+    btn.className = t === name
+      ? 'btn btn-sm btn-primary'
+      : 'btn btn-sm btn-outline-secondary';
+  });
+  if (name === 'jobs') loadJobs();
+  else                 loadCompanies();
+}
+
+// ── Jobs ─────────────────────────────────────────────────────────────────────
+function jobParams() {
+  const p = new URLSearchParams();
+  const q       = document.getElementById('db-q').value.trim();
+  const company = document.getElementById('db-company').value.trim();
+  const source  = document.getElementById('db-source').value;
+  const status  = document.getElementById('db-status').value;
+  const days    = document.getElementById('db-days').value;
+  if (q)       p.set('q', q);
+  if (company) p.set('company', company);
+  if (source)  p.set('source', source);
+  if (status && status !== 'all') p.set('status', status);
+  if (days)    p.set('days_back', days);
+  return p;
+}
+
+function loadJobs() {
+  const el = document.getElementById('db-jobs-partial');
+  el.innerHTML = '<div class="text-muted text-center py-4"><div class="spinner-border spinner-border-sm text-secondary me-2"></div>Loading…</div>';
+  fetch('/database/jobs?' + jobParams())
+    .then(r => r.text())
+    .then(html => { el.innerHTML = html; })
+    .catch(() => { el.innerHTML = '<div class="text-danger p-3">Failed to load.</div>'; });
+}
+
+function resetJobFilters() {
+  ['db-q','db-company'].forEach(id => document.getElementById(id).value = '');
+  ['db-source','db-status','db-days'].forEach(id => document.getElementById(id).selectedIndex = 0);
+  loadJobs();
+}
+
+// ── Companies ─────────────────────────────────────────────────────────────────
+function companyParams() {
+  const p = new URLSearchParams();
+  const q    = document.getElementById('db-co-q').value.trim();
+  const sort = document.getElementById('db-co-sort').value;
+  if (q)    p.set('q', q);
+  if (sort) p.set('sort', sort);
+  return p;
+}
+
+function loadCompanies() {
+  const el = document.getElementById('db-companies-partial');
+  el.innerHTML = '<div class="text-muted text-center py-4"><div class="spinner-border spinner-border-sm text-secondary me-2"></div>Loading…</div>';
+  fetch('/database/companies?' + companyParams())
+    .then(r => r.text())
+    .then(html => { el.innerHTML = html; })
+    .catch(() => { el.innerHTML = '<div class="text-danger p-3">Failed to load.</div>'; });
+}
+
+function resetCompanyFilters() {
+  document.getElementById('db-co-q').value = '';
+  document.getElementById('db-co-sort').selectedIndex = 0;
+  loadCompanies();
+}
+
+// ── Populate source dropdown ──────────────────────────────────────────────────
+fetch('/database/jobs')
+  .then(r => r.text())
+  .then(html => {
+    // Parse sources from first load (they come from the partial)
+    const tmp = document.createElement('div');
+    tmp.innerHTML = html;
+    const sel = document.getElementById('db-source');
+    tmp.querySelectorAll('[data-source]').forEach(opt => {
+      if (![...sel.options].some(o => o.value === opt.dataset.source)) {
+        const o = document.createElement('option');
+        o.value = o.textContent = opt.dataset.source;
+        sel.appendChild(o);
+      }
+    });
+    document.getElementById('db-jobs-partial').innerHTML = html;
+  })
+  .catch(() => { loadJobs(); });
+
+// Enter key on filter inputs
+['db-q','db-company'].forEach(id => {
+  document.getElementById(id).addEventListener('keydown', e => {
+    if (e.key === 'Enter') loadJobs();
+  });
+});
+document.getElementById('db-co-q').addEventListener('keydown', e => {
+  if (e.key === 'Enter') loadCompanies();
+});
+</script>
+{% endblock %}

@@ -1,10 +1,6 @@
-# ─────────────────────────────────────────────────────────────────────────────
-# Job Discovery System — .gitignore
-# ─────────────────────────────────────────────────────────────────────────────
-
-# ── Secrets / environment ─────────────────────────────────────────────────────
+# ── Environment & secrets ─────────────────────────────────────────────────────
 .env
-*.env
+.env.*
 !.env.example
 
 # ── Python ────────────────────────────────────────────────────────────────────
@@ -12,75 +8,57 @@ __pycache__/
 *.py[cod]
 *$py.class
 *.pyo
+*.pyd
 .Python
+*.egg
 *.egg-info/
 dist/
 build/
 eggs/
+.eggs/
 parts/
 var/
-*.egg
-MANIFEST
+sdist/
+wheels/
+*.spec
 
 # ── Virtual environments ──────────────────────────────────────────────────────
 .venv/
 venv/
 env/
 ENV/
-.virtualenv/
 
-# ── Testing / coverage ────────────────────────────────────────────────────────
-.pytest_cache/
-.coverage
-coverage.xml
-htmlcov/
-.tox/
-.nox/
-
-# ── Logs & runtime data ───────────────────────────────────────────────────────
+# ── Logs ──────────────────────────────────────────────────────────────────────
 *.log
+*.log.*
 logs/
-*.pid
-*.sock
-/tmp/
+!logs/.gitkeep
 
-# ── Playwright ────────────────────────────────────────────────────────────────
-# Playwright downloads its own browser binaries; no need to commit them
-playwright/.local-browsers/
-
-# ── Claude Code ───────────────────────────────────────────────────────────────
-.claude/
-
-# ── Debug / scratch HTML ──────────────────────────────────────────────────────
+# ── Scraper debug output ──────────────────────────────────────────────────────
 debug_*.html
+debug_*/
+*.html.bak
 
-# ── IDE / editors ─────────────────────────────────────────────────────────────
-.idea/
+# ── IDE / OS ──────────────────────────────────────────────────────────────────
 .vscode/
+.idea/
 *.swp
 *.swo
 *~
 .DS_Store
 Thumbs.db
+desktop.ini
 
-# ── Docker ────────────────────────────────────────────────────────────────────
-# Don't ignore docker-compose or Dockerfile — they are committed
+# ── Playwright ────────────────────────────────────────────────────────────────
+playwright-report/
+test-results/
 
-# ── Database snapshots / backups ──────────────────────────────────────────────
-*.sql.gz
-*.dump
-backups/
+# ── Docker (kept for reference) ───────────────────────────────────────────────
+# docker-compose.yml intentionally kept
 
-# ── Jupyter / notebooks ───────────────────────────────────────────────────────
-.ipynb_checkpoints/
-*.ipynb
-
-# ── OS ────────────────────────────────────────────────────────────────────────
-.DS_Store
-.DS_Store?
-._*
-.Spotlight-V100
-.Trashes
-ehthumbs.db
-Thumbs.db
-Desktop.ini
+# ── Misc ──────────────────────────────────────────────────────────────────────
+*.bak
+*.tmp
+.cache/
+*.sqlite
+*.db

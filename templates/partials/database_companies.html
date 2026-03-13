@@ -1,0 +1,83 @@
+<!-- partials/database_companies.html — all-time company list (fetch partial) -->
+<div class="d-flex align-items-center justify-content-between mb-2">
+  <small class="text-muted">
+    Showing <strong class="text-white">{{ rows | length }}</strong> companies
+    {% if rows | length >= 300 %}<span class="text-warning">(cap 300 — refine search)</span>{% endif %}
+  </small>
+</div>
+
+{% if rows %}
+<div class="table-responsive">
+  <table class="table table-dark table-sm table-hover align-middle">
+    <thead>
+      <tr>
+        <th>Company</th>
+        <th class="text-end">Total</th>
+        <th class="text-end">Active</th>
+        <th class="text-end">Avg Score</th>
+        <th>Sources</th>
+        <th>First Seen</th>
+        <th>Last Seen</th>
+        <th></th>
+      </tr>
+    </thead>
+    <tbody>
+      {% for row in rows %}
+      <tr>
+        <td style="max-width:220px">
+          <span class="fw-semibold d-block text-truncate" title="{{ row.company }}">
+            {{ row.company or '—' }}
+          </span>
+        </td>
+        <td class="text-end fw-semibold">{{ row.total }}</td>
+        <td class="text-end">
+          {% if row.active and row.active > 0 %}
+          <span class="text-success fw-semibold">{{ row.active }}</span>
+          {% else %}
+          <span class="text-muted">0</span>
+          {% endif %}
+        </td>
+        <td class="text-end">
+          {% if row.avg_score is not none and row.avg_score %}
+          <span class="badge bg-{{ row.avg_score | score_class }}">{{ row.avg_score }}</span>
+          {% else %}
+          <span class="text-muted">—</span>
+          {% endif %}
+        </td>
+        <td>
+          <div class="d-flex flex-wrap gap-1">
+            {% if row.sources %}
+              {% for src in row.sources %}
+                {% if src %}
+                <span class="badge bg-secondary bg-opacity-40" style="font-size:.65rem">{{ src }}</span>
+                {% endif %}
+              {% endfor %}
+            {% else %}
+            <span class="text-muted">—</span>
+            {% endif %}
+          </div>
+        </td>
+        <td class="text-muted" style="font-size:.8rem; white-space:nowrap">
+          {% if row.first_seen %}{{ row.first_seen.strftime('%d %b %Y') }}{% else %}—{% endif %}
+        </td>
+        <td class="text-muted" style="font-size:.8rem; white-space:nowrap">
+          {% if row.last_seen %}{{ row.last_seen | relative_date }}{% else %}—{% endif %}
+        </td>
+        <td>
+          <a href="{{ url_for('jobs') }}?company={{ row.company }}"
+             class="btn btn-sm btn-outline-secondary py-0 px-2"
+             title="Browse active jobs for this company">
+            <i class="bi bi-briefcase"></i>
+          </a>
+        </td>
+      </tr>
+      {% endfor %}
+    </tbody>
+  </table>
+</div>
+{% else %}
+<div class="text-center text-muted py-5">
+  <i class="bi bi-building fs-2 d-block mb-2 opacity-50"></i>
+  No companies match your search.
+</div>
+{% endif %}

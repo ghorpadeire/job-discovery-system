@@ -1,0 +1,467 @@
+{% extends "base.html" %}
+{% block title %}Live Monitor{% endblock %}
+
+{% block head %}
+<style>
+  /* ── Terminal log area ─────────────────────────────────────────── */
+  #log-container {
+    background: #0a0a12;
+    border: 1px solid rgba(255,255,255,0.08);
+    border-radius: .6rem;
+    height: 560px;
+    overflow-y: scroll;
+    font-family: 'Courier New', Courier, monospace;
+    font-size: .82rem;
+    padding: .75rem 1rem;
+    scroll-behavior: smooth;
+  }
+  .log-row {
+    padding: 2px 0;
+    line-height: 1.55;
+    border-bottom: 1px solid rgba(255,255,255,0.03);
+    animation: fadeIn .25s ease;
+  }
+  @keyframes fadeIn { from { opacity: 0; transform: translateX(-4px); } to { opacity: 1; } }
+
+  /* Row colour coding */
+  .log-accepted  { color: #4ade80; }   /* green  — job passed */
+  .log-filtered  { color: #f87171; }   /* red    — job rejected */
+  .log-company   { color: #60a5fa; }   /* blue   — AI company */
+  .log-source    { color: #c084fc; }   /* purple — Playwright source */
+  .log-run       { color: #fbbf24; }   /* amber  — run start/done */
+  .log-page      { color: rgba(255,255,255,0.45); }   /* dim   — page events */
+  .log-error     { color: #fb923c; }   /* orange — errors */
+  .log-info      { color: rgba(255,255,255,0.55); }   /* grey  — misc */
+
+  .log-icon { display: inline-block; width: 1.4em; }
+  .log-ts   { color: rgba(255,255,255,0.25); font-size: .75rem; margin-right: .5em; }
+
+  /* ── Stat cards ────────────────────────────────────────────────── */
+  .live-stat {
+    background: #1a1a2e;
+    border: 1px solid rgba(255,255,255,0.08);
+    border-radius: .6rem;
+    padding: .85rem 1rem;
+    text-align: center;
+    min-width: 110px;
+  }
+  .live-stat-num {
+    font-size: 2rem;
+    font-weight: 700;
+    line-height: 1;
+  }
+  .live-stat-lbl {
+    font-size: .7rem;
+    text-transform: uppercase;
+    letter-spacing: .06em;
+    color: rgba(255,255,255,.4);
+    margin-top: .25rem;
+  }
+
+  /* ── Status pulse ──────────────────────────────────────────────── */
+  #status-dot {
+    width: 10px; height: 10px;
+    border-radius: 50%;
+    display: inline-block;
+    margin-right: .4em;
+    background: #6b7280;
+  }
+  #status-dot.running  { background: #22c55e; animation: pulse 1.2s infinite; }
+  #status-dot.idle     { background: #6b7280; animation: none; }
+  #status-dot.error    { background: #ef4444; animation: none; }
+  @keyframes pulse {
+    0%, 100% { opacity: 1; }
+    50%       { opacity: .3; }
+  }
+
+  /* ── Filter pills ──────────────────────────────────────────────── */
+  .filter-pill {
+    cursor: pointer;
+    user-select: none;
+    opacity: .55;
+    transition: opacity .15s;
+  }
+  .filter-pill.active { opacity: 1; }
+  .filter-pill:hover  { opacity: .85; }
+
+  /* ── Toolbar ───────────────────────────────────────────────────── */
+  .live-toolbar {
+    background: #15152b;
+    border: 1px solid rgba(255,255,255,0.07);
+    border-radius: .6rem;
+    padding: .75rem 1rem;
+    margin-bottom: 1rem;
+    display: flex;
+    align-items: center;
+    flex-wrap: wrap;
+    gap: .75rem;
+  }
+</style>
+{% endblock %}
+
+{% block content %}
+<div class="d-flex align-items-center justify-content-between mb-3">
+  <div>
+    <h4 class="mb-0 fw-bold"><i class="bi bi-broadcast text-success me-2"></i>Live Scrape Monitor</h4>
+    <small class="text-muted">Real-time feed of every job evaluated during a scraper run</small>
+  </div>
+  <div class="d-flex align-items-center gap-3">
+    <span id="status-text" class="text-muted" style="font-size:.85rem">
+      <span id="status-dot"></span><span id="status-label">Connecting…</span>
+    </span>
+    <span id="client-count" class="badge bg-secondary" title="Connected viewers">0 viewers</span>
+  </div>
+</div>
+
+<!-- Stat bar -->
+<div class="d-flex flex-wrap gap-3 mb-3" id="stat-bar">
+  <div class="live-stat">
+    <div class="live-stat-num text-purple" id="stat-sources">0</div>
+    <div class="live-stat-lbl">Sources</div>
+  </div>
+  <div class="live-stat">
+    <div class="live-stat-num text-info"   id="stat-companies">0</div>
+    <div class="live-stat-lbl">Companies</div>
+  </div>
+  <div class="live-stat">
+    <div class="live-stat-num text-success" id="stat-found">0</div>
+    <div class="live-stat-lbl">Jobs Found</div>
+  </div>
+  <div class="live-stat">
+    <div class="live-stat-num text-danger"  id="stat-filtered">0</div>
+    <div class="live-stat-lbl">Filtered Out</div>
+  </div>
+  <div class="live-stat">
+    <div class="live-stat-num text-warning" id="stat-new">0</div>
+    <div class="live-stat-lbl">New in DB</div>
+  </div>
+  <div class="live-stat">
+    <div class="live-stat-num text-secondary" id="stat-pages">0</div>
+    <div class="live-stat-lbl">Pages Scraped</div>
+  </div>
+</div>
+
+<!-- Toolbar -->
+<div class="live-toolbar">
+  <!-- Filter pills -->
+  <span class="text-muted me-1" style="font-size:.8rem">Show:</span>
+
+  <span class="badge rounded-pill filter-pill active bg-success"
+        data-types="job_accepted" id="pill-accepted">
+    ✅ Accepted
+  </span>
+  <span class="badge rounded-pill filter-pill active bg-danger"
+        data-types="job_filtered" id="pill-filtered">
+    ❌ Filtered
+  </span>
+  <span class="badge rounded-pill filter-pill active"
+        style="background:#3b82f6" data-types="company_start,company_done" id="pill-company">
+    🏢 Companies
+  </span>
+  <span class="badge rounded-pill filter-pill active"
+        style="background:#9333ea" data-types="source_start,source_done" id="pill-source">
+    🔍 Sources
+  </span>
+  <span class="badge rounded-pill filter-pill active bg-warning text-dark"
+        data-types="run_start,run_done" id="pill-run">
+    🚀 Run Events
+  </span>
+  <span class="badge rounded-pill filter-pill active bg-secondary"
+        data-types="page_done" id="pill-pages">
+    📄 Pages
+  </span>
+  <span class="badge rounded-pill filter-pill active bg-danger"
+        data-types="error" id="pill-errors">
+    ⚠ Errors
+  </span>
+
+  <div class="ms-auto d-flex gap-2 align-items-center">
+    <!-- Auto-scroll toggle -->
+    <div class="form-check form-switch mb-0">
+      <input class="form-check-input" type="checkbox" id="auto-scroll" checked>
+      <label class="form-check-label" for="auto-scroll" style="font-size:.82rem">Auto-scroll</label>
+    </div>
+
+    <!-- Clear button -->
+    <button class="btn btn-sm btn-outline-secondary" id="btn-clear" onclick="clearLog()">
+      <i class="bi bi-trash"></i> Clear
+    </button>
+  </div>
+</div>
+
+<!-- Terminal log -->
+<div id="log-container">
+  <div class="log-row log-info">
+    <span class="log-ts">--:--:--</span>
+    <span class="log-icon">ℹ</span>
+    Waiting for scraper run… start one with: <code>py run_all.py</code>
+  </div>
+</div>
+
+<!-- Connection warning (shown if SSE drops) -->
+<div id="conn-warning" class="alert alert-warning mt-2 d-none" role="alert">
+  <i class="bi bi-wifi-off me-1"></i>
+  Connection lost — trying to reconnect…
+</div>
+
+{% if public_url %}
+<div class="alert alert-info mt-3 d-flex align-items-center gap-2" role="alert">
+  <i class="bi bi-globe2 fs-5"></i>
+  <div>
+    <strong>Public URL:</strong>
+    <a href="{{ public_url }}/live" target="_blank" class="ms-1">{{ public_url }}/live</a>
+    <small class="text-muted ms-2">(accessible from any device)</small>
+  </div>
+</div>
+{% endif %}
+
+{% endblock %}
+
+{% block scripts %}
+<script>
+// ── State ───────────────────────────────────────────────────────────────────
+const logEl      = document.getElementById('log-container');
+const autoScroll = document.getElementById('auto-scroll');
+let   evtSource  = null;
+let   rowCount   = 0;
+const MAX_ROWS   = 800;   // DOM cap — prune oldest rows beyond this
+
+// Active filter types (union of all enabled pills)
+let activeTypes = new Set();
+document.querySelectorAll('.filter-pill').forEach(p => {
+  p.dataset.types.split(',').forEach(t => activeTypes.add(t.trim()));
+});
+
+// ── Colour mapping ──────────────────────────────────────────────────────────
+const TYPE_CLASS = {
+  'job_accepted':  'log-accepted',
+  'job_filtered':  'log-filtered',
+  'company_start': 'log-company',
+  'company_done':  'log-company',
+  'source_start':  'log-source',
+  'source_done':   'log-source',
+  'run_start':     'log-run',
+  'run_done':      'log-run',
+  'page_done':     'log-page',
+  'error':         'log-error',
+};
+
+const TYPE_ICON = {
+  'job_accepted':  '✅',
+  'job_filtered':  '❌',
+  'company_start': '🏢',
+  'company_done':  '✔',
+  'source_start':  '🔍',
+  'source_done':   '🏁',
+  'run_start':     '🚀',
+  'run_done':      '🎯',
+  'page_done':     '📄',
+  'error':         '⚠',
+};
+
+// ── Format a single event into human-readable text ──────────────────────────
+function formatEvent(ev) {
+  const t = ev.type;
+  switch (t) {
+    case 'run_start':
+      return `Scraper run started — sources: ${(ev.sources||[]).join(', ')||'all'}`;
+    case 'run_done':
+      return `Run complete — ${ev.total_jobs||0} jobs total, ${ev.new||0} new, ${ev.updated||0} updated`;
+    case 'source_start':
+      return `Source started: ${ev.source}`;
+    case 'source_done':
+      return `Source done: ${ev.source} — ${ev.job_count||0} jobs`;
+    case 'page_done':
+      return `[${ev.source}] "${ev.query}" page ${ev.page} — ${ev.job_count||0} jobs`;
+    case 'company_start':
+      return `[AI] Checking ${ev.company}`;
+    case 'company_done':
+      return `[AI] ${ev.company} — ${ev.job_count||0} matching job(s)`;
+    case 'job_accepted':
+      return `${ev.title} @ ${ev.company}  [${ev.source}]`;
+    case 'job_filtered':
+      return `FILTERED: "${ev.title}" @ ${ev.company}  — ${ev.reason||'no match'}`;
+    case 'error':
+      return `ERROR [${ev.source||'?'}]: ${ev.message||'unknown'}`;
+    default:
+      return JSON.stringify(ev);
+  }
+}
+
+// ── Append a row to the terminal log ───────────────────────────────────────
+function appendRow(ev) {
+  if (!activeTypes.has(ev.type)) return;
+
+  const cls  = TYPE_CLASS[ev.type] || 'log-info';
+  const icon = TYPE_ICON[ev.type]  || 'ℹ';
+  const ts   = ev.ts ? new Date(ev.ts).toLocaleTimeString([], {hour:'2-digit',minute:'2-digit',second:'2-digit'}) : '';
+  const text = formatEvent(ev);
+
+  const row = document.createElement('div');
+  row.className = `log-row ${cls}`;
+  row.innerHTML =
+    `<span class="log-ts">${ts}</span>` +
+    `<span class="log-icon">${icon}</span> ` +
+    `${escHtml(text)}`;
+
+  logEl.appendChild(row);
+  rowCount++;
+
+  // Prune old rows
+  if (rowCount > MAX_ROWS) {
+    const oldest = logEl.querySelectorAll('.log-row');
+    for (let i = 0; i < 100; i++) oldest[i]?.remove();
+    rowCount -= 100;
+  }
+
+  if (autoScroll.checked) {
+    logEl.scrollTop = logEl.scrollHeight;
+  }
+}
+
+function escHtml(s) {
+  return String(s)
+    .replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;')
+    .replace(/"/g,'&quot;');
+}
+
+// ── Update stat counters ────────────────────────────────────────────────────
+let stats = { sources:0, companies:0, jobs_found:0, jobs_filtered:0, jobs_new:0, pages_done:0 };
+
+function updateStatEl(id, val) {
+  const el = document.getElementById(id);
+  if (el && el.textContent !== String(val)) {
+    el.textContent = val;
+    el.style.transition = 'transform .15s';
+    el.style.transform  = 'scale(1.25)';
+    setTimeout(() => el.style.transform = 'scale(1)', 150);
+  }
+}
+
+function refreshStats() {
+  updateStatEl('stat-sources',   stats.sources);
+  updateStatEl('stat-companies', stats.companies);
+  updateStatEl('stat-found',     stats.jobs_found);
+  updateStatEl('stat-filtered',  stats.jobs_filtered);
+  updateStatEl('stat-new',       stats.jobs_new);
+  updateStatEl('stat-pages',     stats.pages_done);
+}
+
+function applyEventToStats(ev) {
+  switch (ev.type) {
+    case 'run_start':
+      stats = { sources:0, companies:0, jobs_found:0, jobs_filtered:0, jobs_new:0, pages_done:0 };
+      setStatus('running', 'Running…');
+      break;
+    case 'run_done':
+      stats.jobs_new = ev.new || 0;
+      setStatus('idle', 'Idle — last run complete');
+      break;
+    case 'source_start':   stats.sources++;            break;
+    case 'company_start':  stats.companies++;           break;
+    case 'page_done':
+      stats.pages_done++;
+      stats.jobs_found += (ev.job_count || 0);
+      break;
+    case 'company_done':
+      stats.jobs_found += (ev.job_count || 0);
+      break;
+    case 'job_filtered':   stats.jobs_filtered++;       break;
+  }
+  refreshStats();
+}
+
+// ── Status dot ──────────────────────────────────────────────────────────────
+function setStatus(state, label) {
+  const dot = document.getElementById('status-dot');
+  const lbl = document.getElementById('status-label');
+  dot.className = state;
+  lbl.textContent = label;
+}
+
+// ── SSE connection ──────────────────────────────────────────────────────────
+function connectSSE() {
+  if (evtSource) evtSource.close();
+
+  evtSource = new EventSource('/live/stream');
+
+  evtSource.onopen = () => {
+    document.getElementById('conn-warning').classList.add('d-none');
+    setStatus('idle', 'Connected — waiting for run');
+  };
+
+  evtSource.onmessage = (e) => {
+    try {
+      const ev = JSON.parse(e.data);
+      if (ev.type === 'heartbeat') return;   // keep-alive ping
+      if (ev.type === 'init') {
+        // Server sends viewer count on connect
+        updateClientCount(ev.viewers || 1);
+        return;
+      }
+      applyEventToStats(ev);
+      appendRow(ev);
+    } catch (err) {
+      console.warn('SSE parse error', err, e.data);
+    }
+  };
+
+  evtSource.onerror = () => {
+    setStatus('error', 'Disconnected');
+    document.getElementById('conn-warning').classList.remove('d-none');
+    evtSource.close();
+    // Reconnect after 3 seconds
+    setTimeout(connectSSE, 3000);
+  };
+}
+
+function updateClientCount(n) {
+  const el = document.getElementById('client-count');
+  el.textContent = `${n} viewer${n !== 1 ? 's' : ''}`;
+}
+
+// ── Filter pill toggle ──────────────────────────────────────────────────────
+document.querySelectorAll('.filter-pill').forEach(pill => {
+  pill.addEventListener('click', () => {
+    const types = pill.dataset.types.split(',').map(t => t.trim());
+    const isActive = pill.classList.contains('active');
+    if (isActive) {
+      pill.classList.remove('active');
+      types.forEach(t => activeTypes.delete(t));
+    } else {
+      pill.classList.add('active');
+      types.forEach(t => activeTypes.add(t));
+    }
+  });
+});
+
+// ── Clear log ───────────────────────────────────────────────────────────────
+function clearLog() {
+  logEl.innerHTML = '';
+  rowCount = 0;
+  fetch('/live/clear', { method: 'POST' });
+}
+
+// ── Load history on page open ────────────────────────────────────────────────
+function loadHistory() {
+  fetch('/live/history')
+    .then(r => r.json())
+    .then(events => {
+      if (!events.length) return;
+      const info = document.createElement('div');
+      info.className = 'log-row log-info';
+      info.innerHTML = `<span class="log-icon">📋</span> — replaying ${events.length} recent event(s) —`;
+      logEl.appendChild(info);
+      events.forEach(ev => {
+        applyEventToStats(ev);
+        appendRow(ev);
+      });
+    })
+    .catch(() => {});
+}
+
+// ── Boot ─────────────────────────────────────────────────────────────────────
+connectSSE();
+loadHistory();
+</script>
+{% endblock %}

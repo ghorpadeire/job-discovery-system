@@ -1,0 +1,310 @@
+{% extends "base.html" %}
+{% block title %}Actions{% endblock %}
+
+{% block head %}
+<style>
+  /* ── Action card ─────────────────────────────────────────────── */
+  .action-card {
+    background: #1a1a2e;
+    border: 1px solid rgba(255,255,255,0.08);
+    border-radius: .6rem;
+    padding: 1rem 1.25rem;
+    display: flex;
+    align-items: center;
+    gap: 1rem;
+    transition: border-color .2s, background .2s;
+    cursor: default;
+  }
+  .action-card:hover { background: #1e1e3a; border-color: rgba(255,255,255,0.15); }
+  .action-icon {
+    font-size: 1.6rem;
+    width: 2.4rem;
+    text-align: center;
+    flex-shrink: 0;
+  }
+  .action-btn {
+    flex-shrink: 0;
+    min-width: 90px;
+  }
+
+  /* ── Terminal log ────────────────────────────────────────────── */
+  #log-container {
+    background: #0a0a12;
+    border: 1px solid rgba(255,255,255,0.08);
+    border-radius: .6rem;
+    height: 420px;
+    overflow-y: scroll;
+    font-family: 'Courier New', Courier, monospace;
+    font-size: .82rem;
+    padding: .75rem 1rem;
+    scroll-behavior: smooth;
+  }
+  .log-line {
+    padding: 2px 0;
+    line-height: 1.55;
+    border-bottom: 1px solid rgba(255,255,255,0.03);
+    animation: fadeIn .2s ease;
+  }
+  @keyframes fadeIn { from { opacity: 0; transform: translateX(-4px); } to { opacity: 1; } }
+
+  .log-ok    { color: #4ade80; }
+  .log-error { color: #f87171; }
+  .log-warn  { color: #fbbf24; }
+  .log-info  { color: rgba(255,255,255,0.55); }
+
+  .log-ts { color: rgba(255,255,255,0.25); font-size:.75rem; margin-right:.5em; }
+
+  /* ── Status bar ─────────────────────────────────────────────── */
+  #task-status-bar {
+    background: #15152b;
+    border: 1px solid rgba(255,255,255,0.07);
+    border-radius: .6rem;
+    padding: .65rem 1rem;
+    font-size: .875rem;
+  }
+  #task-dot {
+    width: 9px; height: 9px;
+    border-radius: 50%;
+    background: #6b7280;
+    display: inline-block;
+    margin-right: .4em;
+  }
+  #task-dot.running { background: #22c55e; animation: pulse 1.2s infinite; }
+  #task-dot.done-ok { background: #22c55e; }
+  #task-dot.done-err { background: #ef4444; }
+  @keyframes pulse { 0%,100%{opacity:1} 50%{opacity:.3} }
+</style>
+{% endblock %}
+
+{% block content %}
+<div class="d-flex align-items-center justify-content-between mb-3">
+  <div>
+    <h4 class="mb-0 fw-bold">
+      <i class="bi bi-lightning-charge-fill text-warning me-2"></i>Actions
+    </h4>
+    <small class="text-muted">Manually trigger scraper &amp; scorer tasks — output streams live below</small>
+  </div>
+</div>
+
+<!-- ── Action grid ─────────────────────────────────────────────────────── -->
+<div class="row g-3 mb-4">
+  {% for action in actions %}
+  <div class="col-12 col-lg-6">
+    <div class="action-card">
+      <div class="action-icon text-{{ action.color }}">
+        <i class="bi {{ action.icon }}"></i>
+      </div>
+      <div class="flex-grow-1">
+        <div class="fw-semibold">{{ action.label }}</div>
+        <div class="text-muted" style="font-size:.82rem">{{ action.desc }}</div>
+      </div>
+      <button
+        class="btn btn-sm btn-{{ action.color }} action-btn"
+        data-action="{{ action.id }}"
+        data-label="{{ action.label }}"
+        onclick="runAction('{{ action.id }}', '{{ action.label }}')"
+      >
+        <i class="bi bi-play-fill me-1"></i>Run
+      </button>
+    </div>
+  </div>
+  {% endfor %}
+</div>
+
+<!-- ── Task status bar ────────────────────────────────────────────────── -->
+<div id="task-status-bar" class="mb-2 d-flex align-items-center gap-3">
+  <span>
+    <span id="task-dot"></span>
+    <span id="task-label">No task running</span>
+  </span>
+  <span id="task-pid" class="text-muted" style="font-size:.78rem"></span>
+  <button
+    class="btn btn-sm btn-outline-danger ms-auto d-none"
+    id="btn-kill"
+    onclick="killTask()"
+  >
+    <i class="bi bi-stop-circle me-1"></i>Kill
+  </button>
+  <button
+    class="btn btn-sm btn-outline-secondary"
+    id="btn-clear-log"
+    onclick="clearLog()"
+  >
+    <i class="bi bi-trash me-1"></i>Clear
+  </button>
+</div>
+
+<!-- ── Log terminal ───────────────────────────────────────────────────── -->
+<div id="log-container">
+  <div class="log-line log-info">
+    <span class="log-ts">--:--:--</span>
+    Select an action above to run it — output will stream here.
+  </div>
+</div>
+{% endblock %}
+
+{% block scripts %}
+<script>
+// ── State ────────────────────────────────────────────────────────────────────
+const logEl      = document.getElementById('log-container');
+const taskDot    = document.getElementById('task-dot');
+const taskLabel  = document.getElementById('task-label');
+const taskPid    = document.getElementById('task-pid');
+const btnKill    = document.getElementById('btn-kill');
+let   evtSource  = null;
+let   isRunning  = false;
+let   rowCount   = 0;
+const MAX_ROWS   = 600;
+
+// ── Helpers ──────────────────────────────────────────────────────────────────
+function escHtml(s) {
+  return String(s)
+    .replace(/&/g,'&amp;').replace(/</g,'&lt;')
+    .replace(/>/g,'&gt;').replace(/"/g,'&quot;');
+}
+
+function setStatus(state, label, pid) {
+  taskDot.className = state;
+  taskLabel.textContent = label;
+  taskPid.textContent = pid ? `PID ${pid}` : '';
+  btnKill.classList.toggle('d-none', state !== 'running');
+  setActionBtns(state === 'running');
+}
+
+function setActionBtns(disabled) {
+  document.querySelectorAll('.action-btn').forEach(b => {
+    b.disabled = disabled;
+    if (disabled) b.classList.add('opacity-50');
+    else          b.classList.remove('opacity-50');
+  });
+}
+
+function appendLine(ts, line, level) {
+  const div = document.createElement('div');
+  div.className = `log-line log-${level || 'info'}`;
+  div.innerHTML = `<span class="log-ts">${escHtml(ts)}</span>${escHtml(line)}`;
+  logEl.appendChild(div);
+  rowCount++;
+  if (rowCount > MAX_ROWS) {
+    const rows = logEl.querySelectorAll('.log-line');
+    for (let i = 0; i < 80; i++) rows[i]?.remove();
+    rowCount -= 80;
+  }
+  logEl.scrollTop = logEl.scrollHeight;
+}
+
+function appendSystem(msg, level) {
+  const now = new Date().toLocaleTimeString([], {hour:'2-digit',minute:'2-digit',second:'2-digit'});
+  appendLine(now, msg, level || 'info');
+}
+
+function clearLog() {
+  logEl.innerHTML = '';
+  rowCount = 0;
+}
+
+// ── SSE stream connection ────────────────────────────────────────────────────
+function connectStream() {
+  if (evtSource) { evtSource.close(); evtSource = null; }
+
+  evtSource = new EventSource('/actions/stream');
+
+  evtSource.onmessage = (e) => {
+    try {
+      const ev = JSON.parse(e.data);
+      handleEvent(ev);
+    } catch(err) {
+      console.warn('SSE parse error', err);
+    }
+  };
+
+  evtSource.onerror = () => {
+    // Reconnect silently
+    evtSource.close();
+    setTimeout(connectStream, 3000);
+  };
+}
+
+function handleEvent(ev) {
+  switch (ev.type) {
+    case 'state':
+      // Full state snapshot sent on connect
+      isRunning = ev.running;
+      if (ev.running) {
+        setStatus('running', `Running: ${ev.label}`, ev.pid);
+      } else if (ev.return_code !== null && ev.return_code !== undefined) {
+        const ok = ev.return_code === 0;
+        setStatus(ok ? 'done-ok' : 'done-err',
+                  ok ? `Done — ${ev.label}` : `Failed (rc=${ev.return_code}) — ${ev.label}`);
+      } else {
+        setStatus('', 'No task running');
+      }
+      // Replay buffered log lines
+      (ev.log_lines || []).forEach(l => appendLine(l.ts, l.line, l.level));
+      break;
+
+    case 'start':
+      isRunning = true;
+      clearLog();
+      setStatus('running', `Running: ${ev.label}`);
+      appendSystem(`▶ Started: ${ev.label}`, 'ok');
+      break;
+
+    case 'line':
+      appendLine(ev.ts || '', ev.line || '', ev.level || 'info');
+      break;
+
+    case 'done':
+      isRunning = false;
+      const ok = ev.return_code === 0;
+      setStatus(ok ? 'done-ok' : 'done-err',
+                ok ? 'Finished successfully' : `Exited with code ${ev.return_code}`);
+      appendSystem(ok ? '✔ Task completed successfully.' : `✘ Task exited with code ${ev.return_code}.`,
+                   ok ? 'ok' : 'error');
+      setActionBtns(false);
+      break;
+
+    case 'hb':
+      break; // heartbeat — ignore
+  }
+}
+
+// ── Run action ───────────────────────────────────────────────────────────────
+function runAction(actionId, label) {
+  if (isRunning) return;
+
+  fetch('/actions/run', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
+    body: `action_id=${encodeURIComponent(actionId)}`,
+  })
+  .then(r => r.json())
+  .then(data => {
+    if (data.error) {
+      appendSystem(`Error: ${data.error}`, 'error');
+    }
+  })
+  .catch(err => {
+    appendSystem(`Request error: ${err}`, 'error');
+  });
+}
+
+// ── Kill task ────────────────────────────────────────────────────────────────
+function killTask() {
+  fetch('/actions/kill', { method: 'POST' })
+    .then(r => r.json())
+    .then(data => {
+      if (data.error) appendSystem(`Kill error: ${data.error}`, 'error');
+      else appendSystem('⚡ Kill signal sent.', 'warn');
+    });
+}
+
+// ── Boot ─────────────────────────────────────────────────────────────────────
+connectStream();
+
+// Pre-populate with server-side state (in case page was refreshed mid-run)
+{% if state.running %}
+setActionBtns(true);
+{% endif %}
+</script>
+{% endblock %}

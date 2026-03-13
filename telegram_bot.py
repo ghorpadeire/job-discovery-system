@@ -46,37 +46,35 @@ if sys.platform == "win32":
 from apscheduler.schedulers.asyncio import AsyncIOScheduler
 from apscheduler.triggers.cron import CronTrigger
 from apscheduler.triggers.interval import IntervalTrigger
-from dotenv import load_dotenv
 from sqlalchemy import func, text
 from telegram import Bot, Update
 from telegram.constants import ParseMode
 from telegram.ext import Application, CommandHandler, ContextTypes
 from telegram.helpers import escape_markdown
 
+from core.logging_config import setup_logging
+setup_logging()
+
+from core.config import (
+    TELEGRAM_BOT_TOKEN,
+    TELEGRAM_CHAT_ID,
+    HIGH_SCORE_ALERT_THRESHOLD,
+    DIGEST_MIN_SCORE as _DIGEST_MIN,
+)
 from core.database import get_engine, get_session
 from core.models import Job
-
-load_dotenv()
 
 # ─────────────────────────────────────────────────────────────
 # Config — override any of these via environment variables
 # ─────────────────────────────────────────────────────────────
-BOT_TOKEN        = os.getenv("TELEGRAM_BOT_TOKEN", "")
-CHAT_ID          = os.getenv("TELEGRAM_CHAT_ID",   "")
-DIGEST_MIN_SCORE = int(os.getenv("TG_DIGEST_MIN_SCORE", "70"))   # daily digest threshold
-ALERT_MIN_SCORE  = int(os.getenv("TG_ALERT_MIN_SCORE",  "85"))   # instant-alert threshold
+BOT_TOKEN        = TELEGRAM_BOT_TOKEN
+CHAT_ID          = TELEGRAM_CHAT_ID
+DIGEST_MIN_SCORE = _DIGEST_MIN
+ALERT_MIN_SCORE  = HIGH_SCORE_ALERT_THRESHOLD
 ALERT_POLL_MINS  = int(os.getenv("TG_ALERT_POLL_MINS",  "5"))    # alert poll interval (minutes)
 DIGEST_HOUR      = int(os.getenv("TG_DIGEST_HOUR",      "9"))    # 24-h hour for daily digest
 DIGEST_MINUTE    = int(os.getenv("TG_DIGEST_MINUTE",    "0"))    # minute for daily digest
 
-# ─────────────────────────────────────────────────────────────
-# Logging
-# ─────────────────────────────────────────────────────────────
-logging.basicConfig(
-    level=logging.INFO,
-    format="%(asctime)s  %(levelname)-8s  %(name)s: %(message)s",
-    datefmt="%H:%M:%S",
-)
 log = logging.getLogger("tgbot")
 
 # ─────────────────────────────────────────────────────────────
@@ -218,15 +216,7 @@ async def send_daily_digest(bot: Bot) -> None:
     threshold = escape_markdown(str(DIGEST_MIN_SCORE), version=2)
 
     if not jobs:
-        await bot.send_message(
-            CHAT_ID,
-            (
-                f"📭 *Daily Job Digest — {date_str}*\n\n"
-                f"No new jobs scored \\>{threshold} in the last 24 hours\\."
-            ),
-            parse_mode=ParseMode.MARKDOWN_V2,
-        )
-        log.info("Digest sent: 0 jobs.")
+        log.info("Digest: 0 qualifying jobs — skipping notification (silent).")
         return
 
     count_str = escape_markdown(str(len(jobs)), version=2)

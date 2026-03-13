@@ -214,6 +214,32 @@
       </li>
     </ul>
 
+    <div class="sidebar-section">Data</div>
+    <ul class="nav flex-column">
+      <li class="nav-item">
+        <a class="nav-link {% if request.endpoint == 'database' %}active{% endif %}"
+           href="{{ url_for('database') }}">
+          <i class="bi bi-database"></i> Database
+        </a>
+      </li>
+    </ul>
+
+    <div class="sidebar-section">Tools</div>
+    <ul class="nav flex-column">
+      <li class="nav-item">
+        <a class="nav-link {% if request.endpoint == 'actions' %}active{% endif %}"
+           href="{{ url_for('actions') }}">
+          <i class="bi bi-lightning-charge-fill text-warning"></i> Actions
+        </a>
+      </li>
+      <li class="nav-item">
+        <a class="nav-link {% if request.endpoint == 'live' %}active{% endif %}"
+           href="{{ url_for('live') }}">
+          <i class="bi bi-broadcast text-success"></i> Live Monitor
+        </a>
+      </li>
+    </ul>
+
     <div class="mt-auto px-3 pb-2">
       <small class="text-muted d-block">
         <i class="bi bi-circle-fill text-success" style="font-size:.5rem"></i>
@@ -228,11 +254,14 @@
     <!-- Mobile header -->
     <nav class="navbar navbar-expand-md d-md-none mb-3 px-0">
       <span class="navbar-brand"><i class="bi bi-briefcase-fill text-primary me-1"></i> JobHunter</span>
-      <div class="d-flex gap-2 ms-auto">
+      <div class="d-flex gap-2 ms-auto flex-wrap">
         <a href="{{ url_for('home') }}" class="btn btn-sm btn-outline-secondary"><i class="bi bi-house"></i></a>
         <a href="{{ url_for('jobs') }}" class="btn btn-sm btn-outline-secondary"><i class="bi bi-table"></i></a>
         <a href="{{ url_for('apply_tracker') }}" class="btn btn-sm btn-outline-secondary"><i class="bi bi-kanban"></i></a>
         <a href="{{ url_for('companies') }}" class="btn btn-sm btn-outline-secondary"><i class="bi bi-building"></i></a>
+        <a href="{{ url_for('database') }}" class="btn btn-sm btn-outline-secondary"><i class="bi bi-database"></i></a>
+        <a href="{{ url_for('actions') }}" class="btn btn-sm btn-outline-warning"><i class="bi bi-lightning-charge-fill"></i></a>
+        <a href="{{ url_for('live') }}" class="btn btn-sm btn-outline-success"><i class="bi bi-broadcast"></i></a>
       </div>
     </nav>
 

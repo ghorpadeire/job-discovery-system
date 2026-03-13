@@ -26,6 +26,8 @@ from playwright.async_api import TimeoutError as PlaywrightTimeout
 if TYPE_CHECKING:
     from core.cache import NullCache, RedisCache
 
+from core.progress import emitter
+
 logger = logging.getLogger(__name__)
 
 USER_AGENT = (
@@ -166,6 +168,13 @@ class BaseScraper(ABC):
             pages_done += 1
 
             logger.info(f"  Page {page_num} → {len(new_jobs)} jobs")
+            emitter.emit(
+                "page_done",
+                source    = self.source_name,
+                query     = query,
+                page      = page_num,
+                job_count = len(new_jobs),
+            )
 
             if not new_jobs:
                 logger.debug("  Empty page — stopping pagination")

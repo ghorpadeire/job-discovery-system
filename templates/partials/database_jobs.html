@@ -1,0 +1,84 @@
+<!-- partials/database_jobs.html — all-time job list (HTMX / fetch partial) -->
+<div class="d-flex align-items-center justify-content-between mb-2">
+  <small class="text-muted">
+    Showing <strong class="text-white">{{ [jobs | length, 300] | min }}</strong>
+    of <strong class="text-white">{{ total }}</strong> jobs
+    {% if total > 300 %}<span class="text-warning">(cap 300 — refine filters)</span>{% endif %}
+  </small>
+</div>
+
+{% if jobs %}
+<div class="table-responsive">
+  <table class="table table-dark table-sm table-hover align-middle">
+    <thead>
+      <tr>
+        <th>Title</th>
+        <th>Company</th>
+        <th>
+          <!-- Hidden source options for JS dropdown population -->
+          {% for src in sources %}
+          <span data-source="{{ src }}" class="d-none"></span>
+          {% endfor %}
+          Source
+        </th>
+        <th>Status</th>
+        <th class="text-end">Score</th>
+        <th>First Seen</th>
+        <th></th>
+      </tr>
+    </thead>
+    <tbody>
+      {% for job in jobs %}
+      <tr>
+        <td style="max-width:260px">
+          <span class="d-block text-truncate" title="{{ job.title }}">
+            {{ job.title or '—' }}
+          </span>
+        </td>
+        <td style="max-width:170px">
+          <span class="text-truncate d-block" title="{{ job.company }}">
+            {{ job.company or '—' }}
+          </span>
+        </td>
+        <td>
+          <span class="badge rounded-pill bg-secondary bg-opacity-50" style="font-size:.7rem">
+            {{ job.source or '—' }}
+          </span>
+        </td>
+        <td>
+          {% if job.is_active %}
+          <span class="badge bg-success bg-opacity-25 text-success" style="font-size:.7rem">Active</span>
+          {% else %}
+          <span class="badge bg-secondary bg-opacity-25 text-secondary" style="font-size:.7rem">Inactive</span>
+          {% endif %}
+        </td>
+        <td class="text-end">
+          {% if job.combined_score is not none %}
+          <span class="badge bg-{{ job.combined_score | score_class }}">
+            {{ job.combined_score | int }}
+          </span>
+          {% else %}
+          <span class="text-muted">—</span>
+          {% endif %}
+        </td>
+        <td class="text-muted" style="font-size:.8rem; white-space:nowrap">
+          {% if job.first_seen %}{{ job.first_seen | relative_date }}{% else %}—{% endif %}
+        </td>
+        <td>
+          <a href="{{ url_for('job_detail', job_id=job.id) }}"
+             class="btn btn-sm btn-outline-secondary py-0 px-2"
+             title="View job">
+            <i class="bi bi-eye"></i>
+          </a>
+        </td>
+      </tr>
+      {% endfor %}
+    </tbody>
+  </table>
+</div>
+{% else %}
+<div class="text-center text-muted py-5">
+  <i class="bi bi-inbox fs-2 d-block mb-2 opacity-50"></i>
+  No jobs match your filters.
+</div>
+{% endif %}

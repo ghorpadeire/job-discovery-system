@@ -21,22 +21,13 @@ if sys.platform == "win32":
 
 from sqlalchemy.orm import Session
 
+from core.logging_config import setup_logging
+setup_logging()
+
 from core.database import check_connection, get_engine
 from core.models import Job, migrate_scoring_columns
 from core.scorer import GHOST_THRESHOLD, score_all_active_jobs
 
-# ---------------------------------------------------------------------------
-# Logging
-# ---------------------------------------------------------------------------
-
-logging.basicConfig(
-    level=logging.INFO,
-    format="%(asctime)s [%(levelname)s] %(message)s",
-    handlers=[
-        logging.StreamHandler(sys.stdout),
-        logging.FileHandler("scorer.log", encoding="utf-8"),
-    ],
-)
 logger = logging.getLogger(__name__)
 
 # ---------------------------------------------------------------------------
