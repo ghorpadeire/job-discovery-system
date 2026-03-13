@@ -1,0 +1,21 @@
+name: Register Telegram Webhook (one-time)
+
+on:
+  workflow_dispatch:
+
+jobs:
+  register:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Register webhook
+        run: |
+          python3 -c "
+import urllib.request, json
+token = '${{ secrets.TELEGRAM_BOT_TOKEN }}'
+url = 'https://job-web-ns0j.onrender.com/telegram/webhook'
+api = f'https://api.telegram.org/bot{token}/setWebhook'
+data = json.dumps({'url': url}).encode()
+req = urllib.request.Request(api, data=data, headers={'Content-Type':'application/json'})
+resp = urllib.request.urlopen(req)
+print(json.loads(resp.read()))
+"
