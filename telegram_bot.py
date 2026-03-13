@@ -202,7 +202,7 @@ async def send_daily_digest(bot: Bot) -> None:
         jobs = (
             session.query(Job)
             .filter(
-                Job.is_active      == True,
+                Job.is_active,
                 Job.combined_score >= DIGEST_MIN_SCORE,
                 Job.first_seen     >= cutoff,
             )
@@ -246,7 +246,7 @@ async def check_instant_alerts(bot: Bot) -> None:
         jobs = (
             session.query(Job)
             .filter(
-                Job.is_active      == True,
+                Job.is_active,
                 Job.combined_score >= ALERT_MIN_SCORE,
                 # Catch both False and NULL (newly inserted rows)
                 Job.tg_alerted.isnot(True),
@@ -261,7 +261,7 @@ async def check_instant_alerts(bot: Bot) -> None:
         log.info(f"Instant alert: {len(jobs)} high-score job(s).")
 
         for job in jobs:
-            score_s = escape_markdown(f"{job.combined_score:.0f}", version=2)
+            escape_markdown(f"{job.combined_score:.0f}", version=2)
             thresh_s = escape_markdown(str(ALERT_MIN_SCORE), version=2)
             header = (
                 f"🚨 *High\\-Score Alert\\!*  \\(≥{thresh_s}/100\\)\n\n"
@@ -302,27 +302,27 @@ async def cmd_status(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None
     try:
         active_total  = (
             session.query(func.count(Job.id))
-            .filter(Job.is_active == True)
+            .filter(Job.is_active)
             .scalar() or 0
         )
         avg_score     = (
             session.query(func.avg(Job.combined_score))
-            .filter(Job.is_active == True, Job.combined_score.isnot(None))
+            .filter(Job.is_active, Job.combined_score.isnot(None))
             .scalar()
         )
         added_today   = (
             session.query(func.count(Job.id))
-            .filter(Job.is_active == True, Job.first_seen >= today_start)
+            .filter(Job.is_active, Job.first_seen >= today_start)
             .scalar() or 0
         )
         high_conf     = (
             session.query(func.count(Job.id))
-            .filter(Job.is_active == True, Job.combined_score >= DIGEST_MIN_SCORE)
+            .filter(Job.is_active, Job.combined_score >= DIGEST_MIN_SCORE)
             .scalar() or 0
         )
         very_high     = (
             session.query(func.count(Job.id))
-            .filter(Job.is_active == True, Job.combined_score >= ALERT_MIN_SCORE)
+            .filter(Job.is_active, Job.combined_score >= ALERT_MIN_SCORE)
             .scalar() or 0
         )
     finally:
@@ -359,7 +359,7 @@ async def cmd_top10(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     try:
         jobs = (
             session.query(Job)
-            .filter(Job.is_active == True, Job.combined_score.isnot(None))
+            .filter(Job.is_active, Job.combined_score.isnot(None))
             .order_by(Job.combined_score.desc())
             .limit(10)
             .all()
@@ -374,7 +374,7 @@ async def cmd_top10(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
         )
         return
 
-    header = f"🏆 *Top 10 Jobs*\n\n" + "─" * 24 + "\n\n"
+    header = "🏆 *Top 10 Jobs*\n\n" + "─" * 24 + "\n\n"
     blocks = [_fmt_job(j, rank=i + 1) for i, j in enumerate(jobs)]
     await _send_chunked(context.bot, update.effective_chat.id, blocks, header)
 

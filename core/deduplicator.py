@@ -78,7 +78,7 @@ def find_duplicate(session: Session, title: str, company: str, url: str) -> Opti
 
     # 2. Fingerprint — scan only active jobs to avoid touching archived data
     fp = job_fingerprint(title, company)
-    for job in session.query(Job).filter(Job.is_active == True).all():
+    for job in session.query(Job).filter(Job.is_active).all():
         if job_fingerprint(job.title, job.company) == fp:
             return job
 
@@ -106,7 +106,7 @@ def merge_duplicates(engine) -> int:
     try:
         # ── URL duplicates ──────────────────────────────────────────────
         url_seen: dict[str, int] = {}
-        for job in session.query(Job).filter(Job.is_active == True).order_by(Job.first_seen).all():
+        for job in session.query(Job).filter(Job.is_active).order_by(Job.first_seen).all():
             if job.url in url_seen:
                 # Keep the older record (first_seen earlier), deactivate this one
                 job.is_active = False
@@ -117,7 +117,7 @@ def merge_duplicates(engine) -> int:
 
         # ── Fingerprint duplicates ──────────────────────────────────────
         fp_seen: dict[str, Job] = {}
-        for job in session.query(Job).filter(Job.is_active == True).order_by(Job.first_seen).all():
+        for job in session.query(Job).filter(Job.is_active).order_by(Job.first_seen).all():
             fp = job_fingerprint(job.title, job.company)
             if fp in fp_seen:
                 survivor = fp_seen[fp]

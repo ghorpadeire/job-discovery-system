@@ -28,7 +28,6 @@ import asyncio
 import logging
 import sys
 from datetime import datetime
-from typing import Optional
 
 if sys.platform == "win32":
     sys.stdout.reconfigure(encoding="utf-8", errors="replace")

@@ -26,9 +26,9 @@ import sys
 import threading
 import time
 import urllib.request
-from datetime import datetime, timedelta, timezone
+from datetime import datetime, timedelta
 
-from flask import Flask, Response, g, jsonify, redirect, render_template, request, url_for
+from flask import Flask, Response, jsonify, redirect, render_template, request, url_for
 from sqlalchemy import func, text
 
 from core.logging_config import setup_logging
@@ -106,7 +106,7 @@ def _apply_job_filters(query, args):
     if days_back:
         cutoff = datetime.utcnow() - timedelta(days=days_back)
         query  = query.filter(Job.first_seen >= cutoff)
-    if show_ghost  == "1": query = query.filter(Job.suspected_ghost == True)
+    if show_ghost  == "1": query = query.filter(Job.suspected_ghost)
     if scored_only == "1": query = query.filter(Job.combined_score.isnot(None))
 
     sort_map = {
@@ -146,12 +146,12 @@ def inject_now():
 @app.route("/")
 def home():
     with get_session() as session:
-        total_active  = session.query(func.count(Job.id)).filter(Job.is_active == True).scalar() or 0
+        total_active  = session.query(func.count(Job.id)).filter(Job.is_active).scalar() or 0
         avg_legit     = session.query(func.avg(Job.legitimacy_score)).filter(
-                            Job.is_active == True, Job.legitimacy_score.isnot(None)).scalar()
+                            Job.is_active, Job.legitimacy_score.isnot(None)).scalar()
         avg_legit     = round(avg_legit, 1) if avg_legit else None
         avg_combined  = session.query(func.avg(Job.combined_score)).filter(
-                            Job.is_active == True, Job.combined_score.isnot(None)).scalar()
+                            Job.is_active, Job.combined_score.isnot(None)).scalar()
         avg_combined  = round(avg_combined, 1) if avg_combined else None
 
         cutoff_today  = datetime.utcnow() - timedelta(hours=24)
@@ -159,19 +159,19 @@ def home():
                             Job.first_seen >= cutoff_today).scalar() or 0
 
         ghost_count   = session.query(func.count(Job.id)).filter(
-                            Job.is_active == True, Job.suspected_ghost == True).scalar() or 0
+                            Job.is_active, Job.suspected_ghost).scalar() or 0
 
         high_conf     = session.query(func.count(Job.id)).filter(
-                            Job.is_active == True, Job.combined_score >= 70).scalar() or 0
+                            Job.is_active, Job.combined_score >= 70).scalar() or 0
 
         scored_count  = session.query(func.count(Job.id)).filter(
-                            Job.is_active == True, Job.combined_score.isnot(None)).scalar() or 0
+                            Job.is_active, Job.combined_score.isnot(None)).scalar() or 0
 
         in_tracker    = session.query(func.count(ApplicationTracker.id)).scalar() or 0
 
         top_jobs = (
             session.query(Job)
-            .filter(Job.is_active == True, Job.combined_score.isnot(None))
+            .filter(Job.is_active, Job.combined_score.isnot(None))
             .order_by(Job.combined_score.desc())
             .limit(8).all()
         )
@@ -202,14 +202,14 @@ def jobs():
         sources = [r[0] for r in session.execute(
             text("SELECT DISTINCT source FROM jobs WHERE source IS NOT NULL ORDER BY source")
         ).fetchall()]
-        total = session.query(func.count(Job.id)).filter(Job.is_active == True).scalar() or 0
+        total = session.query(func.count(Job.id)).filter(Job.is_active).scalar() or 0
     return render_template("jobs.html", sources=sources, total=total, args=request.args)
 
 
 @app.route("/jobs/rows")
 def jobs_rows():
     with get_session() as session:
-        q         = session.query(Job).filter(Job.is_active == True)
+        q         = session.query(Job).filter(Job.is_active)
         q         = _apply_job_filters(q, request.args)
         jobs_list = q.limit(200).all()
         count     = q.count()
@@ -511,15 +511,15 @@ def _tg_send(chat_id, text):
 def _tg_status(chat_id):
     today_start = datetime.utcnow().replace(hour=0, minute=0, second=0, microsecond=0)
     with get_session() as session:
-        active      = session.query(func.count(Job.id)).filter(Job.is_active == True).scalar() or 0
+        active      = session.query(func.count(Job.id)).filter(Job.is_active).scalar() or 0
         avg_score   = session.query(func.avg(Job.combined_score)).filter(
-                          Job.is_active == True, Job.combined_score.isnot(None)).scalar()
+                          Job.is_active, Job.combined_score.isnot(None)).scalar()
         added_today = session.query(func.count(Job.id)).filter(
-                          Job.is_active == True, Job.first_seen >= today_start).scalar() or 0
+                          Job.is_active, Job.first_seen >= today_start).scalar() or 0
         high_conf   = session.query(func.count(Job.id)).filter(
-                          Job.is_active == True, Job.combined_score >= 70).scalar() or 0
+                          Job.is_active, Job.combined_score >= 70).scalar() or 0
         very_high   = session.query(func.count(Job.id)).filter(
-                          Job.is_active == True, Job.combined_score >= 85).scalar() or 0
+                          Job.is_active, Job.combined_score >= 85).scalar() or 0
 
     avg_s = f"{avg_score:.1f}" if avg_score else "N/A"
     now_s = datetime.now().strftime("%d %b %Y, %H:%M")
@@ -538,7 +538,7 @@ def _tg_top10(chat_id):
     with get_session() as session:
         jobs = (
             session.query(Job)
-            .filter(Job.is_active == True, Job.combined_score.isnot(None))
+            .filter(Job.is_active, Job.combined_score.isnot(None))
             .order_by(Job.combined_score.desc())
             .limit(10).all()
         )
@@ -878,7 +878,7 @@ def database():
     with get_session() as session:
         # All-time totals (active + inactive)
         total_ever   = session.query(func.count(Job.id)).scalar() or 0
-        total_active = session.query(func.count(Job.id)).filter(Job.is_active == True).scalar() or 0
+        total_active = session.query(func.count(Job.id)).filter(Job.is_active).scalar() or 0
         total_inactive = total_ever - total_active
         total_companies = session.execute(
             text("SELECT COUNT(DISTINCT company) FROM jobs WHERE company IS NOT NULL")
@@ -942,8 +942,8 @@ def database_jobs():
         if keyword:  q = q.filter(
             (Job.title.ilike(f"%{keyword}%")) | (Job.company.ilike(f"%{keyword}%"))
         )
-        if status == "active":   q = q.filter(Job.is_active == True)
-        if status == "inactive": q = q.filter(Job.is_active == False)
+        if status == "active":   q = q.filter(Job.is_active)
+        if status == "inactive": q = q.filter(not Job.is_active)
         if days_back:
             cutoff = datetime.utcnow() - timedelta(days=days_back)
             q = q.filter(Job.first_seen >= cutoff)

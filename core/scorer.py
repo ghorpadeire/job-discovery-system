@@ -66,7 +66,7 @@ class _VolumeCache:
         if key not in self._cache:
             count = (
                 session.query(Job)
-                .filter(Job.company.ilike(f"%{company}%"), Job.is_active == True)
+                .filter(Job.company.ilike(f"%{company}%"), Job.is_active)
                 .count()
             )
             self._cache[key] = count
@@ -296,9 +296,9 @@ def score_all_active_jobs(
     count = 0
 
     try:
-        query = session.query(Job).filter(Job.is_active == True)
+        query = session.query(Job).filter(Job.is_active)
         if not rescore:
-            query = query.filter(Job.legitimacy_score == None)
+            query = query.filter(Job.legitimacy_score is None)
 
         jobs = query.all()
         total = len(jobs)

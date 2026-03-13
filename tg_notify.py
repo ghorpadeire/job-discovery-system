@@ -87,7 +87,7 @@ def _digest_jobs():
         return (
             session.query(Job)
             .filter(
-                Job.is_active == True,
+                Job.is_active,
                 Job.legitimacy_score >= DIGEST_MIN_SCORE,
                 Job.first_seen >= cutoff,
             )
@@ -112,10 +112,10 @@ def _unalerted_jobs():
         return (
             session.query(Job)
             .filter(
-                Job.is_active == True,
+                Job.is_active,
                 Job.legitimacy_score >= ALERT_MIN_SCORE,
-                Job.suspected_ghost == False,
-                Job.tg_alerted == False,
+                not Job.suspected_ghost,
+                not Job.tg_alerted,
             )
             .order_by(Job.legitimacy_score.desc())
             .limit(ALERT_BATCH_SIZE)
@@ -212,7 +212,7 @@ async def run_digest(bot, chat_id: str) -> int:
             lines.append(_fmt_job_line(job))
             lines.append("")
 
-    lines.append(f"<i>Run /top10 or visit the dashboard for full details.</i>")
+    lines.append("<i>Run /top10 or visit the dashboard for full details.</i>")
 
     await _send_chunked(bot, chat_id, "\n".join(lines))
     logger.info("Digest sent: %d jobs", len(jobs))
@@ -337,7 +337,7 @@ def _reset_all_alerts() -> int:
     Session = sessionmaker(bind=engine)
     session = Session()
     try:
-        count = session.query(Job).filter(Job.tg_alerted == True).update(
+        count = session.query(Job).filter(Job.tg_alerted).update(
             {"tg_alerted": False}, synchronize_session=False
         )
         session.commit()

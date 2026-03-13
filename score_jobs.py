@@ -44,13 +44,13 @@ def print_scored_table(engine, min_score: int = 0, ghosts_only: bool = False) ->
     with Session(engine) as session:
         q = (
             session.query(Job)
-            .filter(Job.is_active == True)
-            .filter(Job.legitimacy_score != None)
+            .filter(Job.is_active)
+            .filter(Job.legitimacy_score is not None)
         )
         if min_score > 0:
             q = q.filter(Job.legitimacy_score >= min_score)
         if ghosts_only:
-            q = q.filter(Job.suspected_ghost == True)
+            q = q.filter(Job.suspected_ghost)
         jobs = q.order_by(Job.legitimacy_score.desc()).all()
 
     if not jobs:

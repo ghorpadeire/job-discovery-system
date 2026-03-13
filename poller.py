@@ -16,7 +16,6 @@ Usage:
   py poller.py --once            # run once and exit (useful for testing)
 """
 import argparse
-import asyncio
 import logging
 import os
 import sys
@@ -115,7 +114,8 @@ def _send_startup_message():
         return
 
     try:
-        import urllib.request, json
+        import urllib.request
+        import json
         msg = (
             "🤖 <b>JobScout Poller Started</b>\n\n"
             f"Checking every {DEFAULT_INTERVAL_MINUTES} minutes.\n"
@@ -145,7 +145,8 @@ def _send_no_jobs_message(new_found: int = 0):
     if not token or not chat_id:
         return
     try:
-        import urllib.request, json
+        import urllib.request
+        import json
         now_str = datetime.now(timezone.utc).strftime("%H:%M")
         if new_found > 0:
             # Jobs were scraped but all scored too low (ghosts/low quality)
@@ -228,7 +229,7 @@ def main():
     print("=" * 60)
     print(f"  JobScout Poller — running every {args.interval} minutes")
     print(f"  Scraping: {'NO (alert-only mode)' if args.alert_only else 'YES'}")
-    print(f"  Press CTRL+C to stop")
+    print("  Press CTRL+C to stop")
     print("=" * 60)
     print()
 

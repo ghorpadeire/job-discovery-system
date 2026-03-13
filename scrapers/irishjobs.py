@@ -10,8 +10,6 @@ Max 5 pages per category to avoid overloading the site.
 import asyncio
 import logging
 import random
-import re
-import time
 from typing import Optional
 
 from scrapers.base import BaseScraper, ScraperResult

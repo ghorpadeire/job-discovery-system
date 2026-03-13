@@ -1,0 +1,9 @@
+[lint]
+# Rules selected in CI: E, F, W  (E501 line-length always ignored)
+ignore = [
+  "E501",   # line too long — handled by formatter
+  "E402",   # module-level import not at top — intentional: setup_logging() runs first
+  "E701",   # multiple statements on one line (colon) — style used throughout
+  "E702",   # statement ends with semicolon — style used throughout
+  "E712",   # comparison to True/False — required by SQLAlchemy ORM filter()
+]

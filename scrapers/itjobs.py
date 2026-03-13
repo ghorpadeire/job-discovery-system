@@ -9,7 +9,6 @@ site is accessible.
 Search URL pattern (when site is reachable):
   https://www.itjobs.ie/jobs?q={query}&l=Dublin&pg={page}
 """
-import asyncio
 import logging
 import re
 from datetime import datetime, timedelta
@@ -19,7 +18,7 @@ from bs4 import BeautifulSoup
 from playwright.async_api import Page
 from playwright.async_api import TimeoutError as PlaywrightTimeout
 
-from scrapers.base import BaseScraper, ScraperResult, USER_AGENT
+from scrapers.base import BaseScraper, ScraperResult
 
 logger = logging.getLogger(__name__)
 

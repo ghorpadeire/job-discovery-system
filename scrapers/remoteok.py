@@ -3,10 +3,8 @@ RemoteOK scraper — uses the official public JSON API.
 No browser needed, no bot detection. Returns tech/remote jobs.
 """
 import logging
-import time
 import urllib.request
 import json
-from typing import Optional
 
 from scrapers.base import BaseScraper, ScraperResult
 

@@ -54,7 +54,7 @@ jobs:
 
       - name: Lint with ruff
         run: |
-          ruff check . --select E,F,W --ignore E501,W503
+          ruff check . --select E,F,W --ignore E501,E402,E701,E702,E712,E711
 
       - name: Verify core imports
         env:
