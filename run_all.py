@@ -37,6 +37,7 @@ def main() -> int:
     parser.add_argument("--rescore",       action="store_true", help="Re-score already-scored jobs")
     parser.add_argument("--no-irishjobs", action="store_true", help="Skip IrishJobs scraper")
     parser.add_argument("--no-indeed",    action="store_true", help="Skip Indeed scraper")
+    parser.add_argument("--no-remoteok",  action="store_true", help="Skip RemoteOK scraper")
     parser.add_argument("--no-career-check", action="store_true",
                         help="Skip career page check (faster but less accurate scoring)")
     args = parser.parse_args()
