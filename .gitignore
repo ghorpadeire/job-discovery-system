@@ -62,3 +62,9 @@ test-results/
 .cache/
 *.sqlite
 *.db
+
+# Claude internal files
+.claude/
+
+# Old duplicate folder
+job-discovery/
