@@ -178,6 +178,17 @@ async def run_digest(bot, chat_id: str) -> int:
     jobs = _digest_jobs()
     if not jobs:
         logger.info("Digest: no jobs found with score ≥ %d in last 24h", DIGEST_MIN_SCORE)
+        now_str = datetime.now(timezone.utc).strftime("%a %d %b %Y %H:%M UTC")
+        await bot.send_message(
+            chat_id=int(chat_id),
+            text=(
+                f"📋 <b>Daily Digest — {now_str}</b>\n\n"
+                "😴 <b>No new quality jobs found</b> in the last 24 hours.\n"
+                "The scrapers ran but nothing passed the quality filter.\n\n"
+                "<i>Next scrape: 07:00 or 19:00 UTC</i>"
+            ),
+            parse_mode="HTML",
+        )
         return 0
 
     now_str = datetime.now(timezone.utc).strftime("%a %d %b %Y")
@@ -224,6 +235,16 @@ async def run_alerts(bot, chat_id: str) -> int:
     jobs = _unalerted_jobs()
     if not jobs:
         logger.info("Alerts: no new unalerted jobs with score ≥ %d", ALERT_MIN_SCORE)
+        now_str = datetime.now(timezone.utc).strftime("%H:%M UTC")
+        await bot.send_message(
+            chat_id=int(chat_id),
+            text=(
+                f"⏰ <b>30-min check — {now_str}</b>\n\n"
+                "😔 <b>No new jobs</b> this cycle.\n"
+                "<i>Checking again in 30 minutes.</i>"
+            ),
+            parse_mode="HTML",
+        )
         return 0
 
     # Send a summary header first if more than 3 jobs

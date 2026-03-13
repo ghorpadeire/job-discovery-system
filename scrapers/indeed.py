@@ -71,7 +71,17 @@ class IndeedScraper(BaseScraper):
         seen_urls: set[str] = set()
 
         async with async_playwright() as pw:
-            browser = await pw.chromium.launch(headless=True)
+            browser = await pw.chromium.launch(
+                headless=True,
+                args=[
+                    "--disable-blink-features=AutomationControlled",
+                    "--disable-http2",
+                    "--no-sandbox",
+                    "--disable-setuid-sandbox",
+                    "--disable-dev-shm-usage",
+                    "--disable-gpu",
+                ],
+            )
             context = await browser.new_context(
                 user_agent=_USER_AGENT,
                 viewport={"width": 1280, "height": 900},
